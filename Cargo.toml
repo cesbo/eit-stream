@@ -1,0 +1,8 @@
+[package]
+name = "eit-stream"
+version = "0.1.0"
+authors = ["Andrey Dyldin <and@cesbo.com>"]
+
+[dependencies]
+getopts = "0.2"
+epg = { path = "../libepg" }
