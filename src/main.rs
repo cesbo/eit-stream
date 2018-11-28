@@ -1,9 +1,10 @@
 extern crate getopts;
-extern crate epg;
 extern crate serde_json;
 extern crate chrono;
+extern crate socket;
+extern crate epg;
 
-use std::env;
+use std::{env, time, thread};
 use getopts::Options;
 
 use std::fs::File;
@@ -11,12 +12,14 @@ use serde_json::Value;
 use chrono::prelude::*;
 use epg::{Epg, EpgChannel};
 
+use socket::UdpSocket;
+
 fn usage(app: &str, opts: &Options) {
-    println!("Usage: {} [OPTIONS] udp", app);
+    println!("Usage: {} [OPTIONS] ADDR", app);
     println!("\nOPTIONS:");
     println!("{}", opts.usage_with_format(|opts| opts.collect::<Vec<String>>().join("\n")));
-    println!("\nARGS:");
-    println!("    udp                 Destination address");
+    println!("\n");
+    println!("    ADDR                 Destination address");
 }
 
 fn filter_channels(channels: &mut Vec<EpgChannel>) {
@@ -37,6 +40,8 @@ fn filter_channels(channels: &mut Vec<EpgChannel>) {
 }
 
 fn main() {
+    // Parse Options
+
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
 
@@ -68,7 +73,28 @@ fn main() {
 
     let c_arg = matches.opt_str("c").unwrap();
     let x_arg = matches.opt_str("x").unwrap();
-    let udp = matches.free[0].clone();
+    let addr = matches.free[0].clone();
+
+    // Open Socket
+
+    let dst = addr.splitn(2, "://").collect::<Vec<&str>>();
+    let sock = match dst[0] {
+        "udp" => {
+            match UdpSocket::open(dst[1]) {
+                Ok(v) => v,
+                Err(e) => {
+                    println!("Error: failed to open UDP socket [{}]", e.to_string());
+                    return;
+                },
+            }
+        },
+        _ => {
+            println!("Error: unknown destination type [{}]", addr);
+            return;
+        },
+    };
+
+    // Open Astra Config
 
     let file = match File::open(c_arg) {
         Ok(v) => v,
@@ -102,11 +128,13 @@ fn main() {
         },
     };
 
+    // Open XMLTV
+
     let mut channels: Vec<EpgChannel> = Vec::new();
     {
         let mut epg = Epg::default();
         if let Err(e) = epg.load(&x_arg) {
-            println!("Failed to parse XMLTV. Error:{}", e.to_string());
+            println!("Error: failed to parse XMLTV [{}]", e.to_string());
             return;
         }
 
@@ -124,6 +152,12 @@ fn main() {
     filter_channels(&mut channels);
 
     // TODO: convert EpgChannel into Psi
-    // TODO: open udp
-    // TODO: mainloop
+
+    // Main Loop
+
+    let delay_ms = time::Duration::from_millis(250);
+    loop {
+        // TODO: send ts packets
+        thread::sleep(delay_ms);
+    }
 }
