@@ -8,4 +8,5 @@ getopts = "0.2"
 serde_json = "1.0"
 chrono = "0.4.6"
 socket = { path = "../libsocket" }
+mpegts = { path = "../libmpegts" }
 epg = { path = "../libepg" }

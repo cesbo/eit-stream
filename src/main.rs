@@ -2,6 +2,7 @@ extern crate getopts;
 extern crate serde_json;
 extern crate chrono;
 extern crate socket;
+extern crate mpegts;
 extern crate epg;
 
 use std::{env, time, thread};
@@ -10,7 +11,9 @@ use getopts::Options;
 use std::fs::File;
 use serde_json::Value;
 use chrono::prelude::*;
-use epg::{Epg, EpgChannel};
+use epg::Epg;
+
+use mpegts::psi::{EitItem, Eit};
 
 use socket::UdpSocket;
 
@@ -22,21 +25,93 @@ fn usage(app: &str, opts: &Options) {
     println!("    ADDR                 Destination address");
 }
 
-fn filter_channels(channels: &mut Vec<EpgChannel>) {
+fn load_config(path: &str) -> Value {
+    let file = match File::open(path) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("Error: failed to open config [{}]", e.to_string());
+            return Value::Null;
+        },
+    };
+
+    let mut config: Value = match serde_json::from_reader(file) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("Error: failed to parse config [{}]", e.to_string());
+            return Value::Null;
+        },
+    };
+
+    let config = match config.get_mut("make_stream") {
+        Some(v) => v,
+        None => {
+            println!("Error: channels not found in the config");
+            return Value::Null;
+        },
+    };
+
+    config.take()
+}
+
+#[derive(Debug, Default)]
+struct Channel {
+    eit: Eit,
+    items: Vec<EitItem>,
+}
+
+fn load_channel(config: &Value, epg: &mut Epg) -> Option<Channel> {
+    let xmltv_id = match config.get("xmltv_id") {
+        Some(v) => v.as_str().unwrap_or(""),
+        None => return None,
+    };
+
+    let epg_item = match epg.channels.get_mut(xmltv_id) {
+        Some(v) => v,
+        None => return None,
+    };
+
     let current_time = Utc::now().timestamp();
 
-    for channel in channels {
-        loop {
-            {
-                match channel.events.first_mut() {
-                    Some(event) => if event.stop > current_time { break },
-                    None => break,
-                };
-            }
+    let mut channel = Channel::default();
+    channel.eit.table_id = 0x50;
+    channel.eit.pnr = 0; // TODO
+    channel.eit.tsid = 0; // TODO
+    channel.eit.onid = 0; // TODO
 
-            channel.events.remove(0);
+    for event in epg_item.events.iter_mut() {
+        if event.stop > current_time {
+            event.codepage = 5; // TODO
+            channel.items.push(EitItem::from(&*event));
         }
     }
+
+    Some(channel)
+}
+
+fn load_channels(config_path: &str, xmltv_path: &str) -> Option<Vec<Channel>> {
+    let config = match load_config(config_path) {
+        Value::Array(v) => v,
+        _ => {
+            println!("Error: channels has wrong format");
+            return None;
+        },
+    };
+
+    let mut epg = Epg::default();
+    if let Err(e) = epg.load(xmltv_path) {
+        println!("Error: failed to parse XMLTV [{}]", e.to_string());
+        return None;
+    }
+
+    let mut out: Vec<Channel> = Vec::new();
+    for item in config {
+        match load_channel(&item, &mut epg) {
+            Some(v) => out.push(v),
+            None => {},
+        };
+    }
+
+    Some(out)
 }
 
 fn main() {
@@ -94,70 +169,16 @@ fn main() {
         },
     };
 
-    // Open Astra Config
-
-    let file = match File::open(c_arg) {
-        Ok(v) => v,
-        Err(e) => {
-            println!("Error: failed to open config [{}]", e.to_string());
-            return;
-        },
-    };
-
-    let config: Value = match serde_json::from_reader(file) {
-        Ok(v) => v,
-        Err(e) => {
-            println!("Error: failed to parse config [{}]", e.to_string());
-            return;
-        },
-    };
-
-    let config = match config.get("make_stream") {
+    let mut channels = match load_channels(&c_arg, &x_arg) {
         Some(v) => v,
-        None => {
-            println!("Error: channels not found in the config");
-            return;
-        },
+        None => return,
     };
-
-    let config = match config.as_array() {
-        Some(v) => v,
-        None => {
-            println!("Error: channels has wrong format");
-            return;
-        },
-    };
-
-    // Open XMLTV
-
-    let mut channels: Vec<EpgChannel> = Vec::new();
-    {
-        let mut epg = Epg::default();
-        if let Err(e) = epg.load(&x_arg) {
-            println!("Error: failed to parse XMLTV [{}]", e.to_string());
-            return;
-        }
-
-        for item in config {
-            if let Some(xmltv_id) = item.get("xmltv_id") {
-                let xmltv_id = xmltv_id.as_str().unwrap_or("");
-                match epg.channels.remove(xmltv_id) {
-                    Some(v) => channels.push(v),
-                    None => println!("Warning: channel {} not found", xmltv_id),
-                };
-            }
-        }
-    }
-
-    filter_channels(&mut channels);
-
-    // TODO: convert EpgChannel into Psi
 
     // Main Loop
 
-    let delay_ms = time::Duration::from_millis(250);
-    loop {
-        // TODO: send ts packets
-        thread::sleep(delay_ms);
-    }
+    // let delay_ms = time::Duration::from_millis(250);
+    // loop {
+    //     // TODO: send ts packets
+    //     thread::sleep(delay_ms);
+    // }
 }
