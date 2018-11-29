@@ -13,9 +13,16 @@ use serde_json::Value;
 use chrono::prelude::*;
 use epg::Epg;
 
-use mpegts::psi::{EitItem, Eit};
+use mpegts::ts;
+use mpegts::psi::{Psi, EitItem, Eit, EIT_PID};
 
 use socket::UdpSocket;
+
+#[derive(Default)]
+struct Channel {
+    present: Eit,
+    schedule: Eit,
+}
 
 fn usage(app: &str, opts: &Options) {
     println!("Usage: {} [OPTIONS] ADDR", app);
@@ -53,12 +60,6 @@ fn load_config(path: &str) -> Value {
     config.take()
 }
 
-#[derive(Debug, Default)]
-struct Channel {
-    eit: Eit,
-    items: Vec<EitItem>,
-}
-
 fn load_channel(config: &Value, epg: &mut Epg) -> Option<Channel> {
     let xmltv_id = match config.get("xmltv_id") {
         Some(v) => v.as_str().unwrap_or(""),
@@ -71,21 +72,64 @@ fn load_channel(config: &Value, epg: &mut Epg) -> Option<Channel> {
     };
 
     let current_time = Utc::now().timestamp();
-
     let mut channel = Channel::default();
-    channel.eit.table_id = 0x50;
-    channel.eit.pnr = 0; // TODO
-    channel.eit.tsid = 0; // TODO
-    channel.eit.onid = 0; // TODO
+
+    // Present+Following
+    channel.present.table_id = 0x4E;
+    channel.present.pnr = 1;
+    channel.present.tsid = 1;
+    channel.present.onid = 1;
+
+    // Schedule
+    channel.schedule.table_id = 0x50;
+    channel.schedule.pnr = 1;
+    channel.schedule.tsid = 1;
+    channel.schedule.onid = 1;
 
     for event in epg_item.events.iter_mut() {
         if event.stop > current_time {
             event.codepage = 5; // TODO
-            channel.items.push(EitItem::from(&*event));
+            channel.schedule.items.push(EitItem::from(&*event));
+            if channel.schedule.items.len() == 12 {
+                break;
+            }
         }
     }
 
     Some(channel)
+}
+
+#[inline]
+fn check_first_event(eit: &Eit, current_time: i64) -> bool {
+    if let Some(event) = eit.items.first() {
+        if current_time >= event.start + i64::from(event.duration) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn clear_eit(eit: &mut Eit, current_time: i64) {
+    while ! check_first_event(eit, current_time) {
+        eit.items.remove(0);
+    }
+}
+
+fn clear_channel(channel: &mut Channel) {
+    let current_time = Utc::now().timestamp();
+
+    clear_eit(&mut channel.present, current_time);
+    clear_eit(&mut channel.schedule, current_time);
+
+    while channel.present.items.len() != 2 && channel.schedule.items.len() > 0 {
+        channel.present.items.push(channel.schedule.items.remove(0));
+    }
+
+    if let Some(item) = channel.present.items.first_mut() {
+        if current_time >= item.start {
+            item.status = 4;
+        }
+    }
 }
 
 fn load_channels(config_path: &str, xmltv_path: &str) -> Option<Vec<Channel>> {
@@ -103,15 +147,14 @@ fn load_channels(config_path: &str, xmltv_path: &str) -> Option<Vec<Channel>> {
         return None;
     }
 
-    let mut out: Vec<Channel> = Vec::new();
+    let mut channels: Vec<Channel> = Vec::new();
     for item in config {
         match load_channel(&item, &mut epg) {
-            Some(v) => out.push(v),
+            Some(v) => channels.push(v),
             None => {},
         };
     }
-
-    Some(out)
+    Some(channels)
 }
 
 fn main() {
@@ -122,7 +165,7 @@ fn main() {
 
     let mut opts = Options::new();
     opts.optflag("h", "help", "Print this text");
-    opts.optopt("c", "", "Astra config file", "FILE");
+    opts.optopt("c", "", "Config file", "FILE");
     opts.optopt("x", "", "XMLTV http address or file path", "ADDR");
 
     let matches = match opts.parse(&args[1..]) {
@@ -153,7 +196,7 @@ fn main() {
     // Open Socket
 
     let dst = addr.splitn(2, "://").collect::<Vec<&str>>();
-    let sock = match dst[0] {
+    let udp_socket = match dst[0] {
         "udp" => {
             match UdpSocket::open(dst[1]) {
                 Ok(v) => v,
@@ -176,9 +219,47 @@ fn main() {
 
     // Main Loop
 
-    // let delay_ms = time::Duration::from_millis(250);
-    // loop {
-    //     // TODO: send ts packets
-    //     thread::sleep(delay_ms);
-    // }
+    let mut udp_packet: Vec<u8> = Vec::new();
+    udp_packet.resize(1460 / 188 * 188, 0x00);
+    let mut udp_packet_skip = 0;
+
+    let mut packet = ts::new_ts();
+    ts::set_pid(&mut packet, EIT_PID);
+    ts::set_cc(&mut packet, 0);
+
+    let mut psi = Psi::default();
+
+    let delay_ms = time::Duration::from_millis(100);
+    loop {
+        for channel in channels.iter_mut() {
+            clear_channel(channel);
+
+            // TODO: UdpOutput
+            channel.present.assemble(&mut psi);
+            while psi.demux(&mut packet) {
+                let e = udp_packet_skip + 188;
+                udp_packet[udp_packet_skip .. e].copy_from_slice(&packet[0 .. 188]);
+                udp_packet_skip += 188;
+                if udp_packet_skip == udp_packet.len() {
+                    udp_socket.sendto(&udp_packet).unwrap();
+                    udp_packet_skip = 0;
+                    thread::sleep(delay_ms);
+                }
+            }
+
+            channel.schedule.assemble(&mut psi);
+            while psi.demux(&mut packet) {
+                let e = udp_packet_skip + 188;
+                udp_packet[udp_packet_skip .. e].copy_from_slice(&packet[0 .. 188]);
+                udp_packet_skip += 188;
+                if udp_packet_skip == udp_packet.len() {
+                    udp_socket.sendto(&udp_packet).unwrap();
+                    udp_packet_skip = 0;
+                    thread::sleep(delay_ms);
+                }
+            }
+        }
+
+        thread::sleep(delay_ms);
+    }
 }
