@@ -1,5 +1,4 @@
 extern crate getopts;
-extern crate serde_json;
 extern crate chrono;
 extern crate socket;
 extern crate mpegts;
@@ -9,7 +8,7 @@ use std::{env, time, thread};
 use getopts::Options;
 
 use std::fs::File;
-use serde_json::Value;
+use std::io::{BufRead, BufReader};
 use chrono::prelude::*;
 use epg::Epg;
 
@@ -18,8 +17,15 @@ use mpegts::psi::{Psi, EitItem, Eit, EIT_PID};
 
 use socket::UdpSocket;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Channel {
+    onid: u16,
+    tsid: u16,
+    pnr: u16,
+    lang: String,
+    codepage: usize,
+    id: String,
+
     present: Eit,
     schedule: Eit,
 }
@@ -30,73 +36,97 @@ fn usage(app: &str, opts: &Options) {
     println!("{}", opts.usage_with_format(|opts| opts.collect::<Vec<String>>().join("\n")));
     println!("\n");
     println!("    ADDR                 Destination address");
+    println!("\n");
+    println!("Config format:");
+    println!("onid tsid pnr lang codepage id");
 }
 
-fn load_config(path: &str) -> Value {
+fn load_config(path: &str) -> Option<Vec<Channel>> {
     let file = match File::open(path) {
         Ok(v) => v,
         Err(e) => {
             println!("Error: failed to open config [{}]", e.to_string());
-            return Value::Null;
+            return None;
         },
     };
+    let file = BufReader::new(&file);
 
-    let mut config: Value = match serde_json::from_reader(file) {
-        Ok(v) => v,
-        Err(e) => {
-            println!("Error: failed to parse config [{}]", e.to_string());
-            return Value::Null;
-        },
-    };
+    let mut channels: Vec<Channel> = Vec::new();
 
-    let config = match config.get_mut("make_stream") {
-        Some(v) => v,
-        None => {
-            println!("Error: channels not found in the config");
-            return Value::Null;
-        },
-    };
+    for line in file.lines() {
+        let line = match line {
+            Ok(v) => v,
+            _ => continue,
+        };
+        if line.is_empty() {
+            continue;
+        }
+        let line = line.trim_start();
+        if line.starts_with(";") {
+            continue;
+        }
+        let items: Vec<&str> = line.split_whitespace().collect();
+        if items.len() < 6 {
+            continue;
+        }
 
-    config.take()
+        let mut channel = Channel::default();
+        channel.onid = match items[0].parse() {
+            Ok(v) => v,
+            _ => continue,
+        };
+        channel.tsid = match items[1].parse() {
+            Ok(v) => v,
+            _ => continue,
+        };
+        channel.pnr = match items[2].parse() {
+            Ok(v) => v,
+            _ => continue,
+        };
+        channel.codepage = match items[4].parse() {
+            Ok(v) => v,
+            _ => continue,
+        };
+        if items[3].len() != 3 {
+            continue;
+        }
+        channel.lang.push_str(items[3]);
+        channel.id.push_str(items[5]);
+        channels.push(channel);
+    }
+
+    Some(channels)
 }
 
-fn load_channel(config: &Value, epg: &mut Epg) -> Option<Channel> {
-    let xmltv_id = match config.get("xmltv_id") {
-        Some(v) => v.as_str().unwrap_or(""),
-        None => return None,
-    };
-
-    let epg_item = match epg.channels.get_mut(xmltv_id) {
+fn load_channel(channel: &mut Channel, epg: &mut Epg) {
+    let epg_item = match epg.channels.get_mut(&channel.id) {
         Some(v) => v,
-        None => return None,
+        None => return,
     };
 
     let current_time = Utc::now().timestamp();
-    let mut channel = Channel::default();
 
     // Present+Following
     channel.present.table_id = 0x4E;
-    channel.present.pnr = 1;
-    channel.present.tsid = 1;
-    channel.present.onid = 1;
+    channel.present.pnr = channel.pnr;
+    channel.present.tsid = channel.tsid;
+    channel.present.onid = channel.onid;
 
     // Schedule
     channel.schedule.table_id = 0x50;
-    channel.schedule.pnr = 1;
-    channel.schedule.tsid = 1;
-    channel.schedule.onid = 1;
+    channel.schedule.pnr = channel.pnr;
+    channel.schedule.tsid = channel.tsid;
+    channel.schedule.onid = channel.onid;
 
     for event in epg_item.events.iter_mut() {
         if event.stop > current_time {
-            event.codepage = 5; // TODO
+            event.codepage = channel.codepage;
             channel.schedule.items.push(EitItem::from(&*event));
             if channel.schedule.items.len() == 12 {
                 break;
             }
         }
     }
-
-    Some(channel)
 }
 
 #[inline]
@@ -133,8 +163,8 @@ fn clear_channel(channel: &mut Channel) {
 }
 
 fn load_channels(config_path: &str, xmltv_path: &str) -> Option<Vec<Channel>> {
-    let config = match load_config(config_path) {
-        Value::Array(v) => v,
+    let mut channels = match load_config(config_path) {
+        Some(v) => v,
         _ => {
             println!("Error: channels has wrong format");
             return None;
@@ -147,13 +177,10 @@ fn load_channels(config_path: &str, xmltv_path: &str) -> Option<Vec<Channel>> {
         return None;
     }
 
-    let mut channels: Vec<Channel> = Vec::new();
-    for item in config {
-        match load_channel(&item, &mut epg) {
-            Some(v) => channels.push(v),
-            None => {},
-        };
+    for channel in channels.iter_mut() {
+        load_channel(channel, &mut epg);
     }
+
     Some(channels)
 }
 
@@ -229,12 +256,15 @@ fn main() {
 
     let mut psi = Psi::default();
 
-    let delay_ms = time::Duration::from_millis(100);
+    let loop_delay_ms = time::Duration::from_millis(20);
+    let udp_delay_ms = time::Duration::from_millis(20);
+
     loop {
         for channel in channels.iter_mut() {
             clear_channel(channel);
 
             // TODO: UdpOutput
+
             channel.present.assemble(&mut psi);
             while psi.demux(&mut packet) {
                 let e = udp_packet_skip + 188;
@@ -243,23 +273,13 @@ fn main() {
                 if udp_packet_skip == udp_packet.len() {
                     udp_socket.sendto(&udp_packet).unwrap();
                     udp_packet_skip = 0;
-                    thread::sleep(delay_ms);
+                    thread::sleep(udp_delay_ms);
                 }
             }
 
-            channel.schedule.assemble(&mut psi);
-            while psi.demux(&mut packet) {
-                let e = udp_packet_skip + 188;
-                udp_packet[udp_packet_skip .. e].copy_from_slice(&packet[0 .. 188]);
-                udp_packet_skip += 188;
-                if udp_packet_skip == udp_packet.len() {
-                    udp_socket.sendto(&udp_packet).unwrap();
-                    udp_packet_skip = 0;
-                    thread::sleep(delay_ms);
-                }
-            }
+            // TODO: scheduled
         }
 
-        thread::sleep(delay_ms);
+        thread::sleep(loop_delay_ms);
     }
 }
