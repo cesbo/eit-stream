@@ -101,7 +101,10 @@ fn load_config(path: &str) -> Option<Vec<Channel>> {
 fn load_channel(channel: &mut Channel, epg: &mut Epg) {
     let epg_item = match epg.channels.get_mut(&channel.id) {
         Some(v) => v,
-        None => return,
+        None => {
+            println!("Warning: channel \"{}\" not found in XMLTV", &channel.id);
+            return;
+        },
     };
 
     let current_time = Utc::now().timestamp();
@@ -126,6 +129,10 @@ fn load_channel(channel: &mut Channel, epg: &mut Epg) {
                 break;
             }
         }
+    }
+
+    if channel.schedule.items.is_empty() {
+        println!("Warning: channel \"{}\" has empty list", &channel.id);
     }
 }
 
