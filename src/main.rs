@@ -1,10 +1,10 @@
 extern crate getopts;
 extern crate chrono;
-extern crate socket;
+extern crate udp;
 extern crate mpegts;
 extern crate epg;
 
-use std::{env, time, thread};
+use std::{env, time, thread, cmp};
 use getopts::Options;
 
 use std::fs::File;
@@ -12,10 +12,11 @@ use std::io::{BufRead, BufReader};
 use chrono::prelude::*;
 use epg::Epg;
 
-use mpegts::ts;
 use mpegts::psi::{Psi, EitItem, Eit, EIT_PID};
 
-use socket::UdpSocket;
+use udp::UdpSocket;
+
+include!(concat!(env!("OUT_DIR"), "/build.rs"));
 
 #[derive(Default, Debug)]
 struct Channel {
@@ -28,6 +29,10 @@ struct Channel {
 
     present: Eit,
     schedule: Eit,
+}
+
+fn version() {
+    println!("eit-stream v.{} commit:{}", env!("CARGO_PKG_VERSION"), COMMIT);
 }
 
 fn usage(app: &str, opts: &Options) {
@@ -198,6 +203,7 @@ fn main() {
     let program = args[0].clone();
 
     let mut opts = Options::new();
+    opts.optflag("v", "version", "Version information");
     opts.optflag("h", "help", "Print this text");
     opts.optopt("c", "", "Config file", "FILE");
     opts.optopt("x", "", "XMLTV http address or file path", "ADDR");
@@ -209,6 +215,11 @@ fn main() {
             return;
         }
     };
+
+    if matches.opt_present("v") {
+        version();
+        return;
+    }
 
     if matches.opt_present("h") || matches.free.is_empty() {
         usage(&program, &opts);
@@ -253,18 +264,11 @@ fn main() {
 
     // Main Loop
 
-    let mut udp_packet: Vec<u8> = Vec::new();
-    udp_packet.resize(1460 / 188 * 188, 0x00);
-    let mut udp_packet_skip = 0;
-
-    let mut packet = ts::new_ts();
-    ts::set_pid(&mut packet, EIT_PID);
-    ts::set_cc(&mut packet, 0);
-
+    let mut cc = 0;
     let mut psi = Psi::default();
 
-    let loop_delay_ms = time::Duration::from_millis(20);
-    let udp_delay_ms = time::Duration::from_millis(20);
+    let loop_delay_ms = time::Duration::from_millis(100);
+    let udp_delay_ms = time::Duration::from_millis(100);
 
     loop {
         for channel in channels.iter_mut() {
@@ -273,15 +277,18 @@ fn main() {
             // TODO: UdpOutput
 
             channel.present.assemble(&mut psi);
-            while psi.demux(&mut packet) {
-                let e = udp_packet_skip + 188;
-                udp_packet[udp_packet_skip .. e].copy_from_slice(&packet[0 .. 188]);
-                udp_packet_skip += 188;
-                if udp_packet_skip == udp_packet.len() {
-                    udp_socket.sendto(&udp_packet).unwrap();
-                    udp_packet_skip = 0;
-                    thread::sleep(udp_delay_ms);
-                }
+            let mut ts = Vec::<u8>::new();
+            psi.pid = EIT_PID;
+            psi.cc = cc;
+            psi.demux(&mut ts);
+            cc = psi.cc;
+            let mut skip = 0;
+            while skip < ts.len() {
+                let pkt_len = cmp::min(ts.len() - skip, 1316);
+                let next = skip + pkt_len;
+                udp_socket.sendto(&ts[skip .. next]).unwrap();
+                thread::sleep(udp_delay_ms);
+                skip = next;
             }
 
             // TODO: scheduled
