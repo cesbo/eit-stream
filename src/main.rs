@@ -152,8 +152,14 @@ fn check_first_event(eit: &Eit, current_time: i64) -> bool {
 }
 
 fn clear_eit(eit: &mut Eit, current_time: i64) {
+    let mut count = 0;
     while ! check_first_event(eit, current_time) {
         eit.items.remove(0);
+        count += 1;
+    }
+
+    if count > 0 {
+        eit.version = (eit.version + 1) & 0x1F;
     }
 }
 
@@ -262,16 +268,23 @@ fn main() {
         None => return,
     };
 
+    if channels.len() == 0 {
+        println!("Error: empty channel list");
+        return;
+    }
+
     // Main Loop
 
     let mut cc = 0;
     let mut psi = Psi::default();
 
-    let loop_delay_ms = time::Duration::from_millis(100);
-    let udp_delay_ms = time::Duration::from_millis(100);
+    let loop_delay_ms = time::Duration::from_millis(250 / (channels.len() as u64));
+    let udp_delay_ms = time::Duration::from_millis(1);
 
     loop {
         for channel in channels.iter_mut() {
+            let now = time::Instant::now();
+
             clear_channel(channel);
 
             // TODO: UdpOutput
@@ -291,9 +304,10 @@ fn main() {
                 skip = next;
             }
 
-            // TODO: scheduled
+            let now = now.elapsed();
+            if loop_delay_ms > now {
+                thread::sleep(loop_delay_ms - now);
+            }
         }
-
-        thread::sleep(loop_delay_ms);
     }
 }
