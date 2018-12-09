@@ -23,7 +23,6 @@ struct Channel {
     onid: u16,
     tsid: u16,
     pnr: u16,
-    lang: String,
     codepage: usize,
     id: String,
 
@@ -92,10 +91,6 @@ fn load_config(path: &str) -> Option<Vec<Channel>> {
             Ok(v) => v,
             _ => continue,
         };
-        if items[3].len() != 3 {
-            continue;
-        }
-        channel.lang.push_str(items[3]);
         channel.id.push_str(items[5]);
         channels.push(channel);
     }
