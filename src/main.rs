@@ -12,7 +12,7 @@ use std::io::{BufRead, BufReader};
 use chrono::prelude::*;
 use epg::Epg;
 
-use mpegts::psi::{Psi, EitItem, Eit, EIT_PID};
+use mpegts::psi::{EIT_PID, Eit, EitItem, PsiDemux};
 
 use udp::UdpSocket;
 
@@ -23,11 +23,13 @@ struct Channel {
     onid: u16,
     tsid: u16,
     pnr: u16,
-    codepage: usize,
+    codepage: u8,
     id: String,
 
     present: Eit,
     schedule: Eit,
+
+    ts: Vec<u8>,
 }
 
 fn version() {
@@ -164,13 +166,15 @@ fn clear_channel(channel: &mut Channel) {
     clear_eit(&mut channel.present, current_time);
     clear_eit(&mut channel.schedule, current_time);
 
-    while channel.present.items.len() != 2 && channel.schedule.items.len() > 0 {
-        channel.present.items.push(channel.schedule.items.remove(0));
-    }
+    if channel.present.items.len() != 2 {
+        while channel.present.items.len() != 2 && channel.schedule.items.len() > 0 {
+            channel.present.items.push(channel.schedule.items.remove(0));
+        }
 
-    if let Some(item) = channel.present.items.first_mut() {
-        if current_time >= item.start {
-            item.status = 4;
+        if let Some(item) = channel.present.items.first_mut() {
+            if current_time >= item.start {
+                item.status = 4;
+            }
         }
     }
 }
@@ -271,7 +275,7 @@ fn main() {
     // Main Loop
 
     let mut cc = 0;
-    let mut psi = Psi::default();
+    let mut ts = Vec::<u8>::new();
 
     let loop_delay_ms = time::Duration::from_millis(250 / (channels.len() as u64));
     let udp_delay_ms = time::Duration::from_millis(1);
@@ -284,12 +288,10 @@ fn main() {
 
             // TODO: UdpOutput
 
-            channel.present.assemble(&mut psi);
-            let mut ts = Vec::<u8>::new();
-            psi.pid = EIT_PID;
-            psi.cc = cc;
-            psi.demux(&mut ts);
-            cc = psi.cc;
+            ts.clear();
+            channel.present.demux(EIT_PID, &mut cc, &mut ts);
+            channel.schedule.demux(EIT_PID, &mut cc, &mut ts);
+
             let mut skip = 0;
             while skip < ts.len() {
                 let pkt_len = cmp::min(ts.len() - skip, 1316);
