@@ -6,6 +6,7 @@ use ini::{IniReader, IniItem};
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use chrono::Utc;
 use epg::Epg;
 
 use mpegts::psi::{EIT_PID, Eit, EitItem, PsiDemux};
@@ -93,6 +94,52 @@ fn parse_multiplex<R: io::Read>(instance: &mut Instance, config: &mut IniReader<
     instance.multiplex_list.push(multiplex);
     Ok(())
 }
+
+//
+
+#[inline]
+fn check_first_event(eit: &Eit, current_time: i64) -> bool {
+    if let Some(event) = eit.items.first() {
+        if current_time >= event.start + i64::from(event.duration) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn clear_eit(eit: &mut Eit, current_time: i64) {
+    let mut version_up = false;
+
+    while ! check_first_event(eit, current_time) {
+        eit.items.remove(0);
+        version_up = true;
+    }
+
+    if version_up {
+        eit.version = (eit.version + 1) & 0x1F;
+    }
+}
+
+fn clear_service(service: &mut Service) {
+    let current_time = Utc::now().timestamp();
+
+    clear_eit(&mut service.present, current_time);
+    clear_eit(&mut service.schedule, current_time);
+
+    if service.present.items.len() != 2 {
+        while service.present.items.len() != 2 && service.schedule.items.len() > 0 {
+            service.present.items.push(service.schedule.items.remove(0));
+        }
+
+        if let Some(item) = service.present.items.first_mut() {
+            if current_time >= item.start {
+                item.status = 4;
+            }
+        }
+    }
+}
+
+//
 
 fn parse_service<R: io::Read>(instance: &mut Instance, config: &mut IniReader<R>) -> Result<()> {
     let multiplex = match instance.multiplex_list.last() {
@@ -197,7 +244,40 @@ fn wrap() -> Result<()> {
         return Err(Error::from("output not defined"));
     }
 
-    println!("{:#?}", instance);
+    // Main loop
+    let mut cc = 0;
+    let mut ts = Vec::<u8>::new();
+
+    let loop_delay_ms = time::Duration::from_millis(500 / (instance.service_list.len() as u64));
+    let udp_delay_ms = time::Duration::from_millis(1);
+
+    loop {
+        for service in instance.service_list.iter_mut() {
+            let now = time::Instant::now();
+
+            clear_service(service);
+
+            ts.clear();
+            service.present.demux(EIT_PID, &mut cc, &mut ts);
+            service.schedule.demux(EIT_PID, &mut cc, &mut ts);
+
+            let output = instance.output_list.get(service.output_item_id).unwrap();
+
+            let mut skip = 0;
+            while skip < ts.len() {
+                let pkt_len = cmp::min(ts.len() - skip, 1316);
+                let next = skip + pkt_len;
+                output.sendto(&ts[skip .. next]).unwrap();
+                thread::sleep(udp_delay_ms);
+                skip = next;
+            }
+
+            let now = now.elapsed();
+            if loop_delay_ms > now {
+                thread::sleep(loop_delay_ms - now);
+            }
+        }
+    }
 
     Ok(())
 }
