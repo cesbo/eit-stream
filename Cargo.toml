@@ -3,10 +3,11 @@ name = "eit-stream"
 version = "0.1.0"
 authors = ["Andrey Dyldin <and@cesbo.com>"]
 build = "src/build.rs"
+edition = "2018"
 
 [dependencies]
-getopts = "0.2"
 chrono = "0.4.6"
+ini = { path = "../libini" }
 udp = { path = "../libudp" }
 mpegts = { path = "../libmpegts" }
 epg = { path = "../libepg" }
