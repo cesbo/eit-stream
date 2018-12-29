@@ -32,7 +32,7 @@ CONFIG:
 
 #[derive(Default, Debug)]
 struct Instance {
-    xmltv_list: Vec<Epg>,
+    epg_list: Vec<Epg>,
     output_list: Vec<UdpSocket>,
 
     multiplex_list: Vec<Multiplex>,
@@ -44,7 +44,7 @@ struct Instance {
 
 #[derive(Default, Debug)]
 struct Multiplex {
-    xmltv_item_id: usize,
+    epg_item_id: usize,
     output_item_id: usize,
 
     onid: u16,
@@ -54,7 +54,7 @@ struct Multiplex {
 
 #[derive(Default, Debug)]
 struct Service {
-    xmltv_item_id: usize,
+    epg_item_id: usize,
     output_item_id: usize,
 
     onid: u16,
@@ -148,7 +148,7 @@ fn parse_service<R: io::Read>(instance: &mut Instance, config: &mut IniReader<R>
     };
 
     let mut service = Service::default();
-    service.xmltv_item_id = multiplex.xmltv_item_id;
+    service.epg_item_id = multiplex.epg_item_id;
     service.output_item_id = multiplex.output_item_id;
     service.onid = multiplex.onid;
     service.tsid = multiplex.tsid;
@@ -176,7 +176,7 @@ fn parse_service<R: io::Read>(instance: &mut Instance, config: &mut IniReader<R>
 fn open_xmltv(instance: &mut Instance, path: &str) -> Result<()> {
     let mut epg = Epg::default();
     epg.load(path)?;
-    instance.xmltv_list.push(epg);
+    instance.epg_list.push(epg);
     Ok(())
 }
 
@@ -236,7 +236,7 @@ fn wrap() -> Result<()> {
     // Prase config
     parse_config(&mut instance, &arg)?;
 
-    if instance.xmltv_list.is_empty() {
+    if instance.epg_list.is_empty() {
         return Err(Error::from("xmltv not defined"));
     }
 
@@ -244,7 +244,46 @@ fn wrap() -> Result<()> {
         return Err(Error::from("output not defined"));
     }
 
+    // Prepare EIT from EPG
+
+    let current_time = Utc::now().timestamp();
+
+    for service in &mut instance.service_list {
+        let epg = instance.epg_list.get_mut(service.epg_item_id).unwrap();
+        let epg_item = match epg.channels.get_mut(&service.xmltv_id) {
+            Some(v) => v,
+            None => {
+                println!("Warning: service \"{}\" not found in XMLTV", &service.xmltv_id);
+                continue;
+            },
+        };
+
+        // Present+Following
+        service.present.table_id = 0x4E;
+        service.present.pnr = service.pnr;
+        service.present.tsid = service.tsid;
+        service.present.onid = service.onid;
+
+        // Schedule
+        service.schedule.table_id = 0x50;
+        service.schedule.pnr = service.pnr;
+        service.schedule.tsid = service.tsid;
+        service.schedule.onid = service.onid;
+
+        for event in &mut epg_item.events {
+            if event.stop > current_time {
+                event.codepage = service.codepage;
+                service.schedule.items.push(EitItem::from(&*event));
+            }
+        }
+
+        if service.schedule.items.is_empty() {
+            println!("Warning: service \"{}\" has empty list", &service.xmltv_id);
+        }
+    }
+
     // Main loop
+
     let mut cc = 0;
     let mut ts = Vec::<u8>::new();
 
@@ -278,8 +317,6 @@ fn wrap() -> Result<()> {
             }
         }
     }
-
-    Ok(())
 }
 
 fn main() {
