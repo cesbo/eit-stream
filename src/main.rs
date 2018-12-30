@@ -1,14 +1,13 @@
+use std::{env, time, thread, cmp};
+
 mod error;
 use crate::error::{Error, Result};
 
-use std::{io, env, time, thread, cmp};
-use ini::{IniReader, IniItem};
+mod config;
+use crate::config::parse_config;
 
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use chrono::Utc;
 use epg::Epg;
-
 use mpegts::psi::{EIT_PID, Eit, EitItem, PsiDemux};
 use udp::UdpSocket;
 
@@ -31,38 +30,57 @@ CONFIG:
 }
 
 #[derive(Default, Debug)]
-struct Instance {
-    epg_list: Vec<Epg>,
-    output_list: Vec<UdpSocket>,
+pub struct Instance {
+    pub epg_list: Vec<Epg>,
+    pub output_list: Vec<UdpSocket>,
 
-    multiplex_list: Vec<Multiplex>,
-    service_list: Vec<Service>,
+    pub multiplex_list: Vec<Multiplex>,
+    pub service_list: Vec<Service>,
 
-    onid: u16,
-    codepage: u8,
+    pub onid: u16,
+    pub codepage: u8,
+}
+
+impl Instance {
+    pub fn open_xmltv(&mut self, path: &str) -> Result<()> {
+        let mut epg = Epg::default();
+        epg.load(path)?;
+        self.epg_list.push(epg);
+        Ok(())
+    }
+
+    pub fn open_output(&mut self, addr: &str) -> Result<()> {
+        let dst = addr.splitn(2, "://").collect::<Vec<&str>>();
+        if dst[0] != "udp" {
+            return Err(Error::from(format!("unknown output type [{}]", dst[0])));
+        }
+        let output = UdpSocket::open(dst[1])?;
+        self.output_list.push(output);
+        Ok(())
+    }
 }
 
 #[derive(Default, Debug)]
-struct Multiplex {
-    epg_item_id: usize,
-    output_item_id: usize,
+pub struct Multiplex {
+    pub epg_item_id: usize,
+    pub output_item_id: usize,
 
-    onid: u16,
-    tsid: u16,
-    codepage: u8,
+    pub onid: u16,
+    pub tsid: u16,
+    pub codepage: u8,
 }
 
 #[derive(Default, Debug)]
-struct Service {
-    epg_item_id: usize,
-    output_item_id: usize,
+pub struct Service {
+    pub epg_item_id: usize,
+    pub output_item_id: usize,
 
-    onid: u16,
-    tsid: u16,
-    codepage: u8,
+    pub onid: u16,
+    pub tsid: u16,
+    pub codepage: u8,
 
-    pnr: u16,
-    xmltv_id: String,
+    pub pnr: u16,
+    pub xmltv_id: String,
 
     present: Eit,
     schedule: Eit,
@@ -70,149 +88,48 @@ struct Service {
     ts: Vec<u8>,
 }
 
-fn parse_multiplex<R: io::Read>(instance: &mut Instance, config: &mut IniReader<R>) -> Result<()> {
-    let mut multiplex = Multiplex::default();
-    multiplex.onid = instance.onid;
-    multiplex.codepage = instance.codepage;
+impl Service {
+    #[inline]
+    fn check_first_event(eit: &Eit, current_time: i64) -> bool {
+        if let Some(event) = eit.items.first() {
+            if current_time >= event.start + i64::from(event.duration) {
+                return false;
+            }
+        }
+        return true;
+    }
 
-    while let Some(e) = config.next() {
-        match e? {
-            IniItem::EndSection => break,
-            IniItem::Property(key, value) => {
-                match key.as_ref() {
-                    "onid" => multiplex.onid = value.parse()?,
-                    "tsid" => multiplex.tsid = value.parse()?,
-                    "codepage" => multiplex.codepage = value.parse()?,
-                    // TODO: custom output and xmltv
-                    _ => {},
+    fn clear_eit(eit: &mut Eit, current_time: i64) {
+        let mut version_up = false;
+
+        while ! Service::check_first_event(eit, current_time) {
+            eit.items.remove(0);
+            version_up = true;
+        }
+
+        if version_up {
+            eit.version = (eit.version + 1) & 0x1F;
+        }
+    }
+
+    pub fn clear(&mut self) {
+        let current_time = Utc::now().timestamp();
+
+        Service::clear_eit(&mut self.present, current_time);
+        Service::clear_eit(&mut self.schedule, current_time);
+
+        if self.present.items.len() != 2 {
+            while self.present.items.len() != 2 && self.schedule.items.len() > 0 {
+                self.present.items.push(self.schedule.items.remove(0));
+            }
+
+            if let Some(item) = self.present.items.first_mut() {
+                if current_time >= item.start {
+                    item.status = 4;
                 }
-            },
-            _ => {},
-        };
-    }
-
-    instance.multiplex_list.push(multiplex);
-    Ok(())
-}
-
-//
-
-#[inline]
-fn check_first_event(eit: &Eit, current_time: i64) -> bool {
-    if let Some(event) = eit.items.first() {
-        if current_time >= event.start + i64::from(event.duration) {
-            return false;
-        }
-    }
-    return true;
-}
-
-fn clear_eit(eit: &mut Eit, current_time: i64) {
-    let mut version_up = false;
-
-    while ! check_first_event(eit, current_time) {
-        eit.items.remove(0);
-        version_up = true;
-    }
-
-    if version_up {
-        eit.version = (eit.version + 1) & 0x1F;
-    }
-}
-
-fn clear_service(service: &mut Service) {
-    let current_time = Utc::now().timestamp();
-
-    clear_eit(&mut service.present, current_time);
-    clear_eit(&mut service.schedule, current_time);
-
-    if service.present.items.len() != 2 {
-        while service.present.items.len() != 2 && service.schedule.items.len() > 0 {
-            service.present.items.push(service.schedule.items.remove(0));
-        }
-
-        if let Some(item) = service.present.items.first_mut() {
-            if current_time >= item.start {
-                item.status = 4;
             }
         }
     }
-}
-
-//
-
-fn parse_service<R: io::Read>(instance: &mut Instance, config: &mut IniReader<R>) -> Result<()> {
-    let multiplex = match instance.multiplex_list.last() {
-        Some(v) => v,
-        None => return Err(Error::from("multiplex section not found")),
-    };
-
-    let mut service = Service::default();
-    service.epg_item_id = multiplex.epg_item_id;
-    service.output_item_id = multiplex.output_item_id;
-    service.onid = multiplex.onid;
-    service.tsid = multiplex.tsid;
-    service.codepage = multiplex.codepage;
-
-    while let Some(e) = config.next() {
-        match e? {
-            IniItem::EndSection => break,
-            IniItem::Property(key, value) => {
-                match key.as_ref() {
-                    "pnr" => service.pnr = value.parse()?,
-                    "codepage" => service.codepage = value.parse()?,
-                    "xmltv-id" => service.xmltv_id.push_str(&value),
-                    _ => {},
-                }
-            },
-            _ => {},
-        };
-    }
-
-    instance.service_list.push(service);
-    Ok(())
-}
-
-fn open_xmltv(instance: &mut Instance, path: &str) -> Result<()> {
-    let mut epg = Epg::default();
-    epg.load(path)?;
-    instance.epg_list.push(epg);
-    Ok(())
-}
-
-fn open_output(instance: &mut Instance, addr: &str) -> Result<()> {
-    let dst = addr.splitn(2, "://").collect::<Vec<&str>>();
-    if dst[0] != "udp" {
-        return Err(Error::from(format!("unknown output type [{}]", dst[0])));
-    }
-    let output = UdpSocket::open(dst[1])?;
-    instance.output_list.push(output);
-    Ok(())
-}
-
-fn parse_config(instance: &mut Instance, path: &str) -> Result<()> {
-    let config = File::open(path)?;
-    let mut config = IniReader::new(BufReader::new(config));
-
-    while let Some(e) = config.next() {
-        match e? {
-            IniItem::StartSection(name) => match name.as_ref() {
-                "multiplex" => parse_multiplex(instance, &mut config)?,
-                "service" => parse_service(instance, &mut config)?,
-                _ => {},
-            },
-            IniItem::Property(key, value) => match key.as_ref() {
-                "xmltv" => open_xmltv(instance, &value)?,
-                "output" => open_output(instance, &value)?,
-                "onid" => instance.onid = value.parse()?,
-                "codepage" => instance.codepage = value.parse()?,
-                _ => {},
-            },
-            _ => {},
-        };
-    }
-
-    Ok(())
 }
 
 fn wrap() -> Result<()> {
@@ -294,7 +211,7 @@ fn wrap() -> Result<()> {
         for service in instance.service_list.iter_mut() {
             let now = time::Instant::now();
 
-            clear_service(service);
+            service.clear();
 
             ts.clear();
             service.present.demux(EIT_PID, &mut cc, &mut ts);
