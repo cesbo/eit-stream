@@ -32,7 +32,7 @@ fn parse_multiplex<R: Read>(instance: &mut Instance, config: &mut IniReader<R>) 
 }
 
 fn parse_service<R: Read>(instance: &mut Instance, config: &mut IniReader<R>) -> Result<()> {
-    let multiplex = match instance.multiplex_list.last() {
+    let multiplex = match instance.multiplex_list.last_mut() {
         Some(v) => v,
         None => return Err(Error::from("multiplex section not found")),
     };
@@ -59,7 +59,7 @@ fn parse_service<R: Read>(instance: &mut Instance, config: &mut IniReader<R>) ->
         };
     }
 
-    instance.service_list.push(service);
+    multiplex.service_list.push(service);
     Ok(())
 }
 
