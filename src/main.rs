@@ -91,16 +91,16 @@ pub struct Service {
 
 impl Service {
     #[inline]
-    fn check_first_event(eit: &Eit, current_time: i64) -> bool {
+    fn check_first_event(eit: &Eit, current_time: u64) -> bool {
         if let Some(event) = eit.items.first() {
-            if current_time >= event.start + i64::from(event.duration) {
+            if current_time >= event.start + u64::from(event.duration) {
                 return false;
             }
         }
         return true;
     }
 
-    fn clear_eit(eit: &mut Eit, current_time: i64) {
+    fn clear_eit(eit: &mut Eit, current_time: u64) {
         let mut version_up = false;
 
         while ! Service::check_first_event(eit, current_time) {
@@ -114,7 +114,7 @@ impl Service {
     }
 
     pub fn clear(&mut self) {
-        let current_time = Utc::now().timestamp();
+        let current_time = Utc::now().timestamp() as u64;
 
         Service::clear_eit(&mut self.present, current_time);
         Service::clear_eit(&mut self.schedule, current_time);
@@ -163,7 +163,7 @@ fn wrap() -> Result<()> {
     }
 
     // Prepare EIT from EPG
-    let current_time = Utc::now().timestamp();
+    let current_time = Utc::now().timestamp() as u64;
     for multiplex in &mut instance.multiplex_list {
         for service in &mut multiplex.service_list {
             let epg = instance.epg_list.get_mut(service.epg_item_id).unwrap();
