@@ -3,23 +3,22 @@ use std::io::{Read, BufReader};
 
 use ini::{IniReader, IniItem};
 
-use crate::error::{Error, Result};
-use crate::{Instance, Multiplex, Service};
+use crate::error::Result;
+use crate::{Instance, Service};
 
 fn parse_multiplex<R: Read>(instance: &mut Instance, config: &mut IniReader<R>) -> Result<()> {
-    let mut multiplex = Multiplex::default();
-    multiplex.onid = instance.onid;
-    multiplex.codepage = instance.codepage;
+    instance.multiplex.onid = instance.onid;
+    instance.multiplex.codepage = instance.codepage;
 
     while let Some(e) = config.next() {
         match e? {
             IniItem::EndSection => break,
             IniItem::Property(key, value) => {
                 match key.as_ref() {
-                    "onid" => multiplex.onid = value.parse()?,
-                    "tsid" => multiplex.tsid = value.parse()?,
-                    "codepage" => multiplex.codepage = value.parse()?,
-                    // TODO: custom output and xmltv
+                    "onid" => instance.multiplex.onid = value.parse()?,
+                    "tsid" => instance.multiplex.tsid = value.parse()?,
+                    "codepage" => instance.multiplex.codepage = value.parse()?,
+                    // TODO: custom xmltv
                     _ => {},
                 }
             },
@@ -27,22 +26,15 @@ fn parse_multiplex<R: Read>(instance: &mut Instance, config: &mut IniReader<R>) 
         };
     }
 
-    instance.multiplex_list.push(multiplex);
     Ok(())
 }
 
 fn parse_service<R: Read>(instance: &mut Instance, config: &mut IniReader<R>) -> Result<()> {
-    let multiplex = match instance.multiplex_list.last_mut() {
-        Some(v) => v,
-        None => return Err(Error::from("multiplex section not found")),
-    };
-
     let mut service = Service::default();
-    service.epg_item_id = multiplex.epg_item_id;
-    service.output_item_id = multiplex.output_item_id;
-    service.onid = multiplex.onid;
-    service.tsid = multiplex.tsid;
-    service.codepage = multiplex.codepage;
+    service.epg_item_id = instance.multiplex.epg_item_id;
+    service.onid = instance.multiplex.onid;
+    service.tsid = instance.multiplex.tsid;
+    service.codepage = instance.multiplex.codepage;
 
     while let Some(e) = config.next() {
         match e? {
@@ -59,13 +51,15 @@ fn parse_service<R: Read>(instance: &mut Instance, config: &mut IniReader<R>) ->
         };
     }
 
-    multiplex.service_list.push(service);
+    instance.service_list.push(service);
     Ok(())
 }
 
 pub fn parse_config(instance: &mut Instance, path: &str) -> Result<()> {
     let config = File::open(path)?;
     let mut config = IniReader::new(BufReader::new(config));
+
+    instance.eit_schedule_time = 10;
 
     while let Some(e) = config.next() {
         match e? {
@@ -79,6 +73,7 @@ pub fn parse_config(instance: &mut Instance, path: &str) -> Result<()> {
                 "output" => instance.open_output(&value)?,
                 "onid" => instance.onid = value.parse()?,
                 "codepage" => instance.codepage = value.parse()?,
+                "eit_schedule_time" => instance.eit_schedule_time = value.parse()?,
                 _ => {},
             },
             _ => {},

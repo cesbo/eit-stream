@@ -8,6 +8,7 @@ use crate::config::parse_config;
 
 use chrono::Utc;
 use epg::Epg;
+use mpegts::ts;
 use mpegts::psi::{EIT_PID, Eit, EitItem, PsiDemux};
 use udp::UdpSocket;
 
@@ -29,15 +30,61 @@ CONFIG:
 "#, program);
 }
 
+#[derive(Debug)]
+pub enum Output {
+    None,
+    Udp(UdpSocket),
+}
+
+impl Default for Output {
+    fn default() -> Self {
+        Output::None
+    }
+}
+
+impl Output {
+    pub fn open(addr: &str) -> Result<Self> {
+        let dst = addr.splitn(2, "://").collect::<Vec<&str>>();
+        match dst[0] {
+            "udp" => {
+                let s = UdpSocket::open(dst[1])?;
+                Ok(Output::Udp(s))
+            },
+            _ => {
+                Err(Error::from(format!("unknown output type [{}]", dst[0])))
+            }
+        }
+    }
+
+    pub fn send(&self, data: &[u8]) -> Result<()> {
+        match self {
+            Output::Udp(ref udp) => {
+                udp.sendto(data)?;
+            },
+            Output::None => {},
+        };
+        Ok(())
+    }
+
+    pub fn is_open(&self) -> bool {
+        match self {
+            Output::None => false,
+            _ => true,
+        }
+    }
+}
+
 #[derive(Default, Debug)]
 pub struct Instance {
     pub epg_list: Vec<Epg>,
-    pub output_list: Vec<UdpSocket>,
+    pub output: Output,
 
-    pub multiplex_list: Vec<Multiplex>,
+    pub multiplex: Multiplex,
+    pub service_list: Vec<Service>,
 
     pub onid: u16,
     pub codepage: u8,
+    pub eit_schedule_time: usize,
 }
 
 impl Instance {
@@ -49,12 +96,7 @@ impl Instance {
     }
 
     pub fn open_output(&mut self, addr: &str) -> Result<()> {
-        let dst = addr.splitn(2, "://").collect::<Vec<&str>>();
-        if dst[0] != "udp" {
-            return Err(Error::from(format!("unknown output type [{}]", dst[0])));
-        }
-        let output = UdpSocket::open(dst[1])?;
-        self.output_list.push(output);
+        self.output = Output::open(addr)?;
         Ok(())
     }
 }
@@ -62,19 +104,15 @@ impl Instance {
 #[derive(Default, Debug)]
 pub struct Multiplex {
     pub epg_item_id: usize,
-    pub output_item_id: usize,
 
     pub onid: u16,
     pub tsid: u16,
     pub codepage: u8,
-
-    pub service_list: Vec<Service>,
 }
 
 #[derive(Default, Debug)]
 pub struct Service {
     pub epg_item_id: usize,
-    pub output_item_id: usize,
 
     pub onid: u16,
     pub tsid: u16,
@@ -151,52 +189,50 @@ fn wrap() -> Result<()> {
 
     let mut instance = Instance::default();
 
-    // Prase config
+    // Parse config
     parse_config(&mut instance, &arg)?;
 
     if instance.epg_list.is_empty() {
         return Err(Error::from("xmltv not defined"));
     }
 
-    if instance.output_list.is_empty() {
+    if ! instance.output.is_open() {
         return Err(Error::from("output not defined"));
     }
 
     // Prepare EIT from EPG
     let current_time = Utc::now().timestamp() as u64;
-    for multiplex in &mut instance.multiplex_list {
-        for service in &mut multiplex.service_list {
-            let epg = instance.epg_list.get_mut(service.epg_item_id).unwrap();
-            let epg_item = match epg.channels.get_mut(&service.xmltv_id) {
-                Some(v) => v,
-                None => {
-                    println!("Warning: service \"{}\" not found in XMLTV", &service.xmltv_id);
-                    continue;
-                },
-            };
+    for service in &mut instance.service_list {
+        let epg = instance.epg_list.get_mut(service.epg_item_id).unwrap();
+        let epg_item = match epg.channels.get_mut(&service.xmltv_id) {
+            Some(v) => v,
+            None => {
+                println!("Warning: service \"{}\" not found in XMLTV", &service.xmltv_id);
+                continue;
+            },
+        };
 
-            // Present+Following
-            service.present.table_id = 0x4E;
-            service.present.pnr = service.pnr;
-            service.present.tsid = service.tsid;
-            service.present.onid = service.onid;
+        // Present+Following
+        service.present.table_id = 0x4E;
+        service.present.pnr = service.pnr;
+        service.present.tsid = service.tsid;
+        service.present.onid = service.onid;
 
-            // Schedule
-            service.schedule.table_id = 0x50;
-            service.schedule.pnr = service.pnr;
-            service.schedule.tsid = service.tsid;
-            service.schedule.onid = service.onid;
+        // Schedule
+        service.schedule.table_id = 0x50;
+        service.schedule.pnr = service.pnr;
+        service.schedule.tsid = service.tsid;
+        service.schedule.onid = service.onid;
 
-            for event in &mut epg_item.events {
-                if event.stop > current_time {
-                    event.codepage = service.codepage;
-                    service.schedule.items.push(EitItem::from(&*event));
-                }
+        for event in &mut epg_item.events {
+            if event.stop > current_time {
+                event.codepage = service.codepage;
+                service.schedule.items.push(EitItem::from(&*event));
             }
+        }
 
-            if service.schedule.items.is_empty() {
-                println!("Warning: service \"{}\" has empty list", &service.xmltv_id);
-            }
+        if service.schedule.items.is_empty() {
+            println!("Warning: service \"{}\" has empty list", &service.xmltv_id);
         }
     }
 
@@ -205,36 +241,42 @@ fn wrap() -> Result<()> {
     let mut cc = 0;
     let mut ts = Vec::<u8>::new();
 
-    let loop_delay_ms = time::Duration::from_millis(250);
-    let udp_delay_ms = time::Duration::from_millis(10);
+    let schedule_limit = (instance.service_list.len() + instance.eit_schedule_time - 1) / instance.eit_schedule_time;
+    let mut schedule_skip = 0;
+
+    let idle_delay = time::Duration::from_secs(1);
 
     loop {
-        for multiplex in &mut instance.multiplex_list {
-            for service in &mut multiplex.service_list {
-                let now = time::Instant::now();
+        ts.clear();
+        for service in &mut instance.service_list {
+            service.clear();
+            service.present.demux(EIT_PID, &mut cc, &mut ts);
+        }
 
-                service.clear();
+        for _ in 0 .. schedule_limit {
+            match instance.service_list.get_mut(schedule_skip) {
+                Some(v) => { v.schedule.demux(EIT_PID, &mut cc, &mut ts); },
+                None => {},
+            };
+            schedule_skip = (schedule_skip + 1) % instance.service_list.len();
+        }
 
-                ts.clear();
-                service.present.demux(EIT_PID, &mut cc, &mut ts);
-                service.schedule.demux(EIT_PID, &mut cc, &mut ts);
+        let packets = ts.len() / ts::PACKET_SIZE;
+        if packets == 0 {
+            thread::sleep(idle_delay);
+            continue;
+        }
 
-                // TODO: UDP output
-                let output = instance.output_list.get(service.output_item_id).unwrap();
-                let mut skip = 0;
-                while skip < ts.len() {
-                    let pkt_len = cmp::min(ts.len() - skip, 1316);
-                    let next = skip + pkt_len;
-                    output.sendto(&ts[skip .. next]).unwrap();
-                    thread::sleep(udp_delay_ms);
-                    skip = next;
-                }
+        let pps = time::Duration::from_nanos(1_000_000_000_u64 / (((6 + packets) / 7) as u64));
 
-                let now = now.elapsed();
-                if loop_delay_ms > now {
-                    thread::sleep(loop_delay_ms - now);
-                }
-            }
+        // TODO: UDP output
+        let mut skip = 0;
+        while skip < ts.len() {
+            let pkt_len = cmp::min(ts.len() - skip, 1316);
+            let next = skip + pkt_len;
+            instance.output.send(&ts[skip .. next]).unwrap();
+            thread::sleep(pps);
+            skip = next;
         }
     }
 }
