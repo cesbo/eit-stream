@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 mod config;
 use crate::config::parse_config;
 
-use chrono::Utc;
+use chrono;
 use epg::Epg;
 use mpegts::ts;
 use mpegts::psi::{EIT_PID, Eit, EitItem, PsiDemux};
@@ -85,6 +85,7 @@ pub struct Instance {
     pub onid: u16,
     pub codepage: u8,
     pub eit_schedule_time: usize,
+    pub eit_days: usize,
 }
 
 impl Instance {
@@ -152,7 +153,7 @@ impl Service {
     }
 
     pub fn clear(&mut self) {
-        let current_time = Utc::now().timestamp() as u64;
+        let current_time = chrono::Utc::now().timestamp() as u64;
 
         Service::clear_eit(&mut self.present, current_time);
         Service::clear_eit(&mut self.schedule, current_time);
@@ -201,7 +202,10 @@ fn wrap() -> Result<()> {
     }
 
     // Prepare EIT from EPG
-    let current_time = Utc::now().timestamp() as u64;
+    let now = chrono::Utc::now();
+    let current_time = now.timestamp() as u64;
+    let last_time = (now + chrono::Duration::days(instance.eit_days as i64)).timestamp() as u64;
+
     for service in &mut instance.service_list {
         let epg = instance.epg_list.get_mut(service.epg_item_id).unwrap();
         let epg_item = match epg.channels.get_mut(&service.xmltv_id) {
@@ -225,6 +229,9 @@ fn wrap() -> Result<()> {
         service.schedule.onid = service.onid;
 
         for event in &mut epg_item.events {
+            if event.start > last_time {
+                break;
+            }
             if event.stop > current_time {
                 event.codepage = service.codepage;
                 service.schedule.items.push(EitItem::from(&*event));

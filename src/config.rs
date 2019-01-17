@@ -60,6 +60,7 @@ pub fn parse_config(instance: &mut Instance, path: &str) -> Result<()> {
     let mut config = IniReader::new(BufReader::new(config));
 
     instance.eit_schedule_time = 10;
+    instance.eit_days = 3;
 
     while let Some(e) = config.next() {
         match e? {
@@ -74,6 +75,7 @@ pub fn parse_config(instance: &mut Instance, path: &str) -> Result<()> {
                 "onid" => instance.onid = value.parse()?,
                 "codepage" => instance.codepage = value.parse()?,
                 "eit_schedule_time" => instance.eit_schedule_time = value.parse()?,
+                "eit_days" => instance.eit_days = value.parse()?,
                 _ => {},
             },
             _ => {},
