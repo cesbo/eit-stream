@@ -1,4 +1,4 @@
-1use std::{env, time, thread, cmp};
+use std::{env, time, thread, cmp};
 
 mod error;
 use crate::error::{Error, Result};
