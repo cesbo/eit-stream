@@ -1,4 +1,4 @@
-use std::{env, time, thread, cmp};
+1use std::{env, time, thread, cmp};
 
 mod error;
 use crate::error::{Error, Result};
@@ -84,8 +84,8 @@ pub struct Instance {
 
     pub onid: u16,
     pub codepage: u8,
-    pub eit_schedule_time: usize,
     pub eit_days: usize,
+    pub eit_rate: usize,
 }
 
 impl Instance {
@@ -248,24 +248,39 @@ fn wrap() -> Result<()> {
     let mut cc = 0;
     let mut ts = Vec::<u8>::new();
 
-    let schedule_limit = (instance.service_list.len() + instance.eit_schedule_time - 1) / instance.eit_schedule_time;
+    let rate_limit = instance.eit_rate * 1000 / 8;
+
+    let mut present_skip = 0;
     let mut schedule_skip = 0;
 
     let idle_delay = time::Duration::from_secs(1);
 
     loop {
-        ts.clear();
-        for service in &mut instance.service_list {
+        while present_skip < instance.service_list.len() {
+            let service = &mut instance.service_list[present_skip];
             service.clear();
             service.present.demux(EIT_PID, &mut cc, &mut ts);
+            present_skip += 1;
+            if ts.len() >= rate_limit {
+                break;
+            }
         }
 
-        for _ in 0 .. schedule_limit {
-            match instance.service_list.get_mut(schedule_skip) {
-                Some(v) => { v.schedule.demux(EIT_PID, &mut cc, &mut ts); },
-                None => {},
-            };
-            schedule_skip = (schedule_skip + 1) % instance.service_list.len();
+        if present_skip == instance.service_list.len() {
+            present_skip = 0;
+
+            while schedule_skip < instance.service_list.len() {
+                let service = &instance.service_list[schedule_skip];
+                service.schedule.demux(EIT_PID, &mut cc, &mut ts);
+                schedule_skip += 1;
+                if ts.len() >= rate_limit {
+                    break;
+                }
+            }
+
+            if schedule_skip == instance.service_list.len() {
+                schedule_skip = 0;
+            }
         }
 
         let packets = ts.len() / ts::PACKET_SIZE;
@@ -281,10 +296,13 @@ fn wrap() -> Result<()> {
         while skip < ts.len() {
             let pkt_len = cmp::min(ts.len() - skip, 1316);
             let next = skip + pkt_len;
-            instance.output.send(&ts[skip .. next]).unwrap();
+            if next > rate_limit { break };
+            instance.output.send(&ts[skip..next]).unwrap();
             thread::sleep(pps);
             skip = next;
         }
+
+        ts.drain(.. skip);
     }
 }
 
