@@ -1,10 +1,10 @@
 use std::{env, time, thread, cmp};
 
 mod error;
-use crate::error::{Error, Result};
+use error::{Error, Result};
 
 mod config;
-use crate::config::parse_config;
+use config::parse_config;
 
 use chrono;
 use epg::Epg;
