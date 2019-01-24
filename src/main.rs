@@ -1,22 +1,25 @@
 use std::{env, time, thread, cmp};
 
-mod error;
-use error::{Error, Result};
-
-mod config;
-use config::parse_config;
-
 use chrono;
 use epg::Epg;
 use mpegts::ts;
 use mpegts::psi::{EIT_PID, Eit, EitItem, PsiDemux};
 use udp::UdpSocket;
 
+mod error;
+use error::{Error, Result};
+
+mod config;
+use config::parse_config;
+
+
 include!(concat!(env!("OUT_DIR"), "/build.rs"));
+
 
 fn version() {
     println!("eit-stream v.{} commit:{}", env!("CARGO_PKG_VERSION"), COMMIT);
 }
+
 
 fn usage(program: &str) {
     println!(r#"Usage: {} CONFIG
@@ -30,17 +33,20 @@ CONFIG:
 "#, program);
 }
 
+
 #[derive(Debug)]
 pub enum Output {
     None,
     Udp(UdpSocket),
 }
 
+
 impl Default for Output {
     fn default() -> Self {
         Output::None
     }
 }
+
 
 impl Output {
     pub fn open(addr: &str) -> Result<Self> {
@@ -74,6 +80,7 @@ impl Output {
     }
 }
 
+
 #[derive(Default, Debug)]
 pub struct Instance {
     pub epg_list: Vec<Epg>,
@@ -87,6 +94,7 @@ pub struct Instance {
     pub eit_days: usize,
     pub eit_rate: usize,
 }
+
 
 impl Instance {
     pub fn open_xmltv(&mut self, path: &str) -> Result<()> {
@@ -102,6 +110,7 @@ impl Instance {
     }
 }
 
+
 #[derive(Default, Debug)]
 pub struct Multiplex {
     pub epg_item_id: usize,
@@ -110,6 +119,7 @@ pub struct Multiplex {
     pub tsid: u16,
     pub codepage: u8,
 }
+
 
 #[derive(Default, Debug)]
 pub struct Service {
@@ -127,6 +137,7 @@ pub struct Service {
 
     ts: Vec<u8>,
 }
+
 
 impl Service {
     #[inline]
@@ -171,6 +182,7 @@ impl Service {
         }
     }
 }
+
 
 fn wrap() -> Result<()> {
     // Parse Options
@@ -305,6 +317,7 @@ fn wrap() -> Result<()> {
         ts.drain(.. skip);
     }
 }
+
 
 fn main() {
     if let Err(e) = wrap() {

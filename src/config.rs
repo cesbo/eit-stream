@@ -6,6 +6,7 @@ use ini::{IniReader, IniItem};
 use crate::error::Result;
 use crate::{Instance, Service};
 
+
 fn parse_multiplex<R: Read>(instance: &mut Instance, config: &mut IniReader<R>) -> Result<()> {
     instance.multiplex.onid = instance.onid;
     instance.multiplex.codepage = instance.codepage;
@@ -28,6 +29,7 @@ fn parse_multiplex<R: Read>(instance: &mut Instance, config: &mut IniReader<R>) 
 
     Ok(())
 }
+
 
 fn parse_service<R: Read>(instance: &mut Instance, config: &mut IniReader<R>) -> Result<()> {
     let mut service = Service::default();
@@ -55,9 +57,10 @@ fn parse_service<R: Read>(instance: &mut Instance, config: &mut IniReader<R>) ->
     Ok(())
 }
 
+
 pub fn parse_config(instance: &mut Instance, path: &str) -> Result<()> {
     let config = File::open(path)?;
-    let mut config = IniReader::new(BufReader::new(config));
+    let mut config = IniReader::new(config);
 
     instance.eit_days = 3;
     instance.eit_rate = 3000;
