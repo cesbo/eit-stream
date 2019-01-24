@@ -1,22 +1,25 @@
 use std::{env, time, thread, cmp};
 
-mod error;
-use error::{Error, Result};
-
-mod config;
-use config::parse_config;
-
 use chrono;
 use epg::Epg;
 use mpegts::ts;
 use mpegts::psi::{EIT_PID, Eit, EitItem, PsiDemux};
 use udp::UdpSocket;
 
+mod error;
+use error::{Error, Result};
+
+mod config;
+use config::{Config, parse_config};
+
+
 include!(concat!(env!("OUT_DIR"), "/build.rs"));
+
 
 fn version() {
     println!("eit-stream v.{} commit:{}", env!("CARGO_PKG_VERSION"), COMMIT);
 }
+
 
 fn usage(program: &str) {
     println!(r#"Usage: {} CONFIG
@@ -30,17 +33,20 @@ CONFIG:
 "#, program);
 }
 
+
 #[derive(Debug)]
 pub enum Output {
     None,
     Udp(UdpSocket),
 }
 
+
 impl Default for Output {
     fn default() -> Self {
         Output::None
     }
 }
+
 
 impl Output {
     pub fn open(addr: &str) -> Result<Self> {
@@ -74,6 +80,7 @@ impl Output {
     }
 }
 
+
 #[derive(Default, Debug)]
 pub struct Instance {
     pub epg_list: Vec<Epg>,
@@ -87,6 +94,7 @@ pub struct Instance {
     pub eit_days: usize,
     pub eit_rate: usize,
 }
+
 
 impl Instance {
     pub fn open_xmltv(&mut self, path: &str) -> Result<()> {
@@ -102,6 +110,7 @@ impl Instance {
     }
 }
 
+
 #[derive(Default, Debug)]
 pub struct Multiplex {
     pub epg_item_id: usize,
@@ -110,6 +119,21 @@ pub struct Multiplex {
     pub tsid: u16,
     pub codepage: u8,
 }
+
+
+impl Config for Multiplex {
+    fn property(&mut self, key: &str, value: &str) -> Result<()> {
+        match key {
+            "onid" => self.onid = value.parse()?,
+            "tsid" => self.tsid = value.parse()?,
+            "codepage" => self.codepage = value.parse()?,
+            // TODO: custom xmltv
+            _ => {},
+        };
+        Ok(())
+    }
+}
+
 
 #[derive(Default, Debug)]
 pub struct Service {
@@ -127,6 +151,21 @@ pub struct Service {
 
     ts: Vec<u8>,
 }
+
+
+impl Config for Service {
+    fn property(&mut self, key: &str, value: &str) -> Result<()> {
+        match key {
+            "pnr" => self.pnr = value.parse()?,
+            "codepage" => self.codepage = value.parse()?,
+            "xmltv-id" => self.xmltv_id.push_str(&value),
+            // TODO: custom xmltv
+            _ => {},
+        };
+        Ok(())
+    }
+}
+
 
 impl Service {
     #[inline]
@@ -172,6 +211,7 @@ impl Service {
     }
 }
 
+
 fn wrap() -> Result<()> {
     // Parse Options
     let mut args = env::args();
@@ -189,6 +229,9 @@ fn wrap() -> Result<()> {
     };
 
     let mut instance = Instance::default();
+    instance.onid = 1;
+    instance.eit_days = 3;
+    instance.eit_rate = 3000;
 
     // Parse config
     parse_config(&mut instance, &arg)?;
@@ -305,6 +348,7 @@ fn wrap() -> Result<()> {
         ts.drain(.. skip);
     }
 }
+
 
 fn main() {
     if let Err(e) = wrap() {
