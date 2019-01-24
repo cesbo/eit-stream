@@ -1,49 +1,72 @@
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, BufReader};
 
 use ini::{IniReader, IniItem};
 
 use crate::error::Result;
 use crate::{Instance, Service};
 
+fn parse_multiplex<R: Read>(instance: &mut Instance, config: &mut IniReader<R>) -> Result<()> {
+    instance.multiplex.onid = instance.onid;
+    instance.multiplex.codepage = instance.codepage;
 
-pub trait Config {
-    fn property(&mut self, _key: &str, _value: &str) -> Result<()>;
-
-    fn parse<R: Read>(&mut self, reader: &mut IniReader<R>) -> Result <()>{
-        while let Some(e) = reader.next() {
-            match e? {
-                IniItem::Property(ref key, ref value) => self.property(key, value)?,
-                IniItem::StartSection(ref _name) => unimplemented!(),
-                IniItem::EndSection => break,
-            };
-        }
-        Ok(())
+    while let Some(e) = config.next() {
+        match e? {
+            IniItem::EndSection => break,
+            IniItem::Property(key, value) => {
+                match key.as_ref() {
+                    "onid" => instance.multiplex.onid = value.parse()?,
+                    "tsid" => instance.multiplex.tsid = value.parse()?,
+                    "codepage" => instance.multiplex.codepage = value.parse()?,
+                    // TODO: custom xmltv
+                    _ => {},
+                }
+            },
+            _ => {},
+        };
     }
+
+    Ok(())
 }
 
+fn parse_service<R: Read>(instance: &mut Instance, config: &mut IniReader<R>) -> Result<()> {
+    let mut service = Service::default();
+    service.epg_item_id = instance.multiplex.epg_item_id;
+    service.onid = instance.multiplex.onid;
+    service.tsid = instance.multiplex.tsid;
+    service.codepage = instance.multiplex.codepage;
+
+    while let Some(e) = config.next() {
+        match e? {
+            IniItem::EndSection => break,
+            IniItem::Property(key, value) => {
+                match key.as_ref() {
+                    "pnr" => service.pnr = value.parse()?,
+                    "codepage" => service.codepage = value.parse()?,
+                    "xmltv-id" => service.xmltv_id.push_str(&value),
+                    _ => {},
+                }
+            },
+            _ => {},
+        };
+    }
+
+    instance.service_list.push(service);
+    Ok(())
+}
 
 pub fn parse_config(instance: &mut Instance, path: &str) -> Result<()> {
     let config = File::open(path)?;
-    let mut config = IniReader::new(config);
+    let mut config = IniReader::new(BufReader::new(config));
+
+    instance.eit_days = 3;
+    instance.eit_rate = 3000;
 
     while let Some(e) = config.next() {
         match e? {
             IniItem::StartSection(name) => match name.as_ref() {
-                "multiplex" => {
-                    instance.multiplex.onid = instance.onid;
-                    instance.multiplex.codepage = instance.codepage;
-                    instance.multiplex.parse(&mut config)?;
-                },
-                "service" => {
-                    let mut service = Service::default();
-                    service.epg_item_id = instance.multiplex.epg_item_id;
-                    service.onid = instance.multiplex.onid;
-                    service.tsid = instance.multiplex.tsid;
-                    service.codepage = instance.multiplex.codepage;
-                    service.parse(&mut config)?;
-                    instance.service_list.push(service);
-                },
+                "multiplex" => parse_multiplex(instance, &mut config)?,
+                "service" => parse_service(instance, &mut config)?,
                 _ => {},
             },
             IniItem::Property(key, value) => match key.as_ref() {
