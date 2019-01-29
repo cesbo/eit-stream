@@ -4,88 +4,64 @@ use std::io::Read;
 use ini::{IniReader, IniItem};
 
 use crate::error::Result;
-use crate::{Instance, Multiplex, Service};
+use crate::{Instance, Service};
 
 
-pub trait Config {
-    fn section<R: Read>(&mut self, _name: &str, _reader: &mut IniReader<R>) -> Result<()> { unimplemented!() }
-    fn property(&mut self, _key: &str, _value: &str) -> Result<()> { unimplemented!() }
+fn parse_multiplex<R: Read>(instance: &mut Instance, reader: &mut IniReader<R>) -> Result<()> {
+    instance.multiplex.onid = instance.onid;
+    instance.multiplex.codepage = instance.codepage;
 
-    fn parse<R: Read>(&mut self, reader: &mut IniReader<R>) -> Result<()> {
-        while let Some(e) = reader.next() {
-            match e? {
-                IniItem::Property(ref key, ref value) => self.property(key, value)?,
-                IniItem::StartSection(ref name) => self.section(name, reader)?,
-                IniItem::EndSection => break,
+    while let Some(e) = reader.next() {
+        if let IniItem::Property(ref key, ref value) = e? {
+            match key.as_str() {
+                "onid" => instance.multiplex.onid = value.parse()?,
+                "tsid" => instance.multiplex.tsid = value.parse()?,
+                "codepage" => instance.multiplex.codepage = value.parse()?,
+                // TODO: custom xmltv
+                _ => {},
             };
+        } else {
+            break
         }
-        Ok(())
     }
+    Ok(())
 }
 
 
-impl Config for Instance {
-    fn section<R: Read>(&mut self, name: &str, reader: &mut IniReader<R>) -> Result<()> {
-        match name {
-            "multiplex" => {
-                self.multiplex.onid = self.onid;
-                self.multiplex.codepage = self.codepage;
-                self.multiplex.parse(reader)?;
-            },
-            "service" => {
-                let mut service = Service::default();
-                service.epg_item_id = self.multiplex.epg_item_id;
-                service.onid = self.multiplex.onid;
-                service.tsid = self.multiplex.tsid;
-                service.codepage = self.multiplex.codepage;
-                service.parse(reader)?;
-                self.service_list.push(service);
-            },
-            _ => {},
-        };
-        Ok(())
+fn parse_service<R: Read>(instance: &mut Instance, reader: &mut IniReader<R>) -> Result<()> {
+    let mut service = Service::default();
+    service.epg_item_id = instance.multiplex.epg_item_id;
+    service.onid = instance.multiplex.onid;
+    service.tsid = instance.multiplex.tsid;
+    service.codepage = instance.multiplex.codepage;
+
+    while let Some(e) = reader.next() {
+        if let IniItem::Property(ref key, ref value) = e? {
+            match key.as_str() {
+                "pnr" => service.pnr = value.parse()?,
+                "codepage" => service.codepage = value.parse()?,
+                "xmltv-id" => service.xmltv_id.push_str(&value),
+                // TODO: custom xmltv
+                _ => {},
+            };
+        } else {
+            break
+        }
     }
 
-    fn property(&mut self, key: &str, value: &str) -> Result<()> {
-        match key {
-            "xmltv" => self.open_xmltv(&value)?,
-            "output" => self.open_output(&value)?,
-            "onid" => self.onid = value.parse()?,
-            "codepage" => self.codepage = value.parse()?,
-            "eit-days" => self.eit_days = value.parse()?,
-            "eit-rate" => self.eit_rate = value.parse()?,
-            _ => {},
-        };
-        Ok(())
-    }
+    instance.service_list.push(service);
+    Ok(())
 }
 
 
-impl Config for Multiplex {
-    fn property(&mut self, key: &str, value: &str) -> Result<()> {
-        match key {
-            "onid" => self.onid = value.parse()?,
-            "tsid" => self.tsid = value.parse()?,
-            "codepage" => self.codepage = value.parse()?,
-            // TODO: custom xmltv
-            _ => {},
-        };
-        Ok(())
+fn skip_section<R: Read>(reader: &mut IniReader<R>) -> Result<()> {
+    while let Some(e) = reader.next() {
+        if let IniItem::EndSection = e? {
+            break
+        }
     }
-}
 
-
-impl Config for Service {
-    fn property(&mut self, key: &str, value: &str) -> Result<()> {
-        match key {
-            "pnr" => self.pnr = value.parse()?,
-            "codepage" => self.codepage = value.parse()?,
-            "xmltv-id" => self.xmltv_id.push_str(&value),
-            // TODO: custom xmltv
-            _ => {},
-        };
-        Ok(())
-    }
+    Ok(())
 }
 
 
@@ -97,5 +73,28 @@ pub fn parse_config(instance: &mut Instance, path: &str) -> Result<()> {
     instance.eit_days = 3;
     instance.eit_rate = 3000;
 
-    instance.parse(&mut reader)
+    while let Some(e) = reader.next() {
+        match e? {
+            IniItem::Property(ref key, ref value) => {
+                match key.as_str() {
+                    "xmltv" => instance.open_xmltv(&value)?,
+                    "output" => instance.open_output(&value)?,
+                    "onid" => instance.onid = value.parse()?,
+                    "codepage" => instance.codepage = value.parse()?,
+                    "eit-days" => instance.eit_days = value.parse()?,
+                    "eit-rate" => instance.eit_rate = value.parse()?,
+                    _ => {},
+                };
+            },
+            IniItem::StartSection(ref name) => {
+                match name.as_str() {
+                    "multiplex" => parse_multiplex(instance, &mut reader)?,
+                    "service" => parse_service(instance, &mut reader)?,
+                    _ => skip_section(&mut reader)?,
+                };
+            },
+            _ => {},
+        };
+    }
+    Ok(())
 }
