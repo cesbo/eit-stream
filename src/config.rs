@@ -1,4 +1,4 @@
-use ini::{IniReader, Section};
+use ini::{Ini, Section};
 
 use crate::error::Result;
 use crate::{Instance, Service};
@@ -9,7 +9,7 @@ fn parse_multiplex(instance: &mut Instance, section: &Section) -> Result<()> {
     instance.multiplex.codepage = instance.codepage;
 
     for (key, value) in section {
-        match key.as_str() {
+        match key.as_ref() {
             "onid" => instance.multiplex.onid = value.parse()?,
             "tsid" => instance.multiplex.tsid = value.parse()?,
             "codepage" => instance.multiplex.codepage = value.parse()?,
@@ -30,7 +30,7 @@ fn parse_service(instance: &mut Instance, section: &Section) -> Result<()> {
     service.codepage = instance.multiplex.codepage;
 
     for (key, value) in section {
-        match key.as_str() {
+        match key.as_ref() {
             "pnr" => service.pnr = value.parse()?,
             "codepage" => service.codepage = value.parse()?,
             "xmltv-id" => service.xmltv_id.push_str(&value),
@@ -45,8 +45,12 @@ fn parse_service(instance: &mut Instance, section: &Section) -> Result<()> {
 
 
 fn parse_base(instance: &mut Instance, section: &Section) -> Result<()> {
+    instance.onid = 1;
+    instance.eit_days = 3;
+    instance.eit_rate = 3000;
+
     for (key, value) in section {
-        match key.as_str() {
+        match key.as_ref() {
             "xmltv" => instance.open_xmltv(&value)?,
             "output" => instance.open_output(&value)?,
             "onid" => instance.onid = value.parse()?,
@@ -56,18 +60,16 @@ fn parse_base(instance: &mut Instance, section: &Section) -> Result<()> {
             _ => {},
         };
     }
+
     Ok(())
 }
 
-pub fn parse_config(instance: &mut Instance, path: &str) -> Result<()> {
-    let config = IniReader::open(path)?;
 
-    instance.onid = 1;
-    instance.eit_days = 3;
-    instance.eit_rate = 3000;
+pub fn parse_config(instance: &mut Instance, path: &str) -> Result<()> {
+    let config = Ini::open(path)?;
 
     for (name, section) in &config {
-        match name.as_str() {
+        match name.as_ref() {
             "" => parse_base(instance, section)?,
             "multiplex" => parse_multiplex(instance, section)?,
             "service" => parse_service(instance, section)?,
