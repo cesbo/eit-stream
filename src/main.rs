@@ -201,6 +201,9 @@ fn wrap() -> Result<()> {
     };
 
     let mut instance = Instance::default();
+    instance.onid = 1;
+    instance.eit_days = 3;
+    instance.eit_rate = 3000;
 
     // Parse config
     parse_config(&mut instance, &arg)?;

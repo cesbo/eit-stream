@@ -45,10 +45,6 @@ fn parse_service(instance: &mut Instance, section: &Section) -> Result<()> {
 
 
 fn parse_base(instance: &mut Instance, section: &Section) -> Result<()> {
-    instance.onid = 1;
-    instance.eit_days = 3;
-    instance.eit_rate = 3000;
-
     for (key, value) in section {
         match key.as_ref() {
             "xmltv" => instance.open_xmltv(&value)?,
