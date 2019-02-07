@@ -9,8 +9,7 @@ use udp::UdpSocket;
 mod error;
 use error::{Error, Result};
 
-mod config;
-use config::parse_config;
+use ini::Section;
 
 
 include!(concat!(env!("OUT_DIR"), "/build.rs"));
@@ -201,19 +200,51 @@ fn wrap() -> Result<()> {
     };
 
     let mut instance = Instance::default();
-    instance.onid = 1;
-    instance.eit_days = 3;
-    instance.eit_rate = 3000;
 
     // Parse config
-    parse_config(&mut instance, &arg)?;
+    let config = Section::open(&arg)?;
+    instance.onid = config.get_number("onid", 1)?;
+    instance.codepage = config.get_number("codepage", 0)?;
+    instance.eit_days = config.get_number("eit-days", 3)?;
+    instance.eit_rate = config.get_number("eit-rate", 3000)?;
 
-    if instance.epg_list.is_empty() {
-        return Err(Error::from("xmltv not defined"));
-    }
+    match config.get_str("xmltv") {
+        Some(v) => instance.open_xmltv(v)?,
+        None => return Err(Error::from("xmltv not defined")),
+    };
 
-    if ! instance.output.is_open() {
-        return Err(Error::from("output not defined"));
+    match config.get_str("output") {
+        Some(v) => instance.open_output(v)?,
+        None => return Err(Error::from("output not defined")),
+    };
+
+    for section in config.sections() {
+        match section.get_name() {
+            "multiplex" => {
+                instance.multiplex.onid = section.get_number("onid", instance.onid)?;
+                instance.multiplex.codepage = section.get_number("codepage", instance.codepage)?;
+                instance.multiplex.tsid = section.get_number("tsid", 1)?;
+                // TODO: custom xmltv
+            },
+            "service" => {
+                let mut service = Service::default();
+                match section.get_str("xmltv-id") {
+                    Some(v) => service.xmltv_id.push_str(v),
+                    None => {
+                        eprintln!("Warning: 'xmltv-id' option not defined for service at line {}", section.get_line());
+                        continue;
+                    },
+                };
+                service.epg_item_id = instance.multiplex.epg_item_id; // ?WTF
+                service.onid = instance.multiplex.onid;
+                service.tsid = instance.multiplex.tsid;
+                service.codepage = section.get_number("codepage", instance.multiplex.codepage)?;
+                service.pnr = section.get_number("pnr", 0)?;
+                // TODO: custom xmltv
+                instance.service_list.push(service);
+            },
+            _ => {},
+        }
     }
 
     // Prepare EIT from EPG
