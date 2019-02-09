@@ -9,7 +9,7 @@ use udp::UdpSocket;
 mod error;
 use error::{Error, Result};
 
-use ini::Section;
+use config::Config;
 
 
 include!(concat!(env!("OUT_DIR"), "/build.rs"));
@@ -202,7 +202,7 @@ fn wrap() -> Result<()> {
     let mut instance = Instance::default();
 
     // Parse config
-    let config = Section::open(&arg)?;
+    let config = Config::open(&arg)?;
     instance.onid = config.get_number("onid", 1)?;
     instance.codepage = config.get_number("codepage", 0)?;
     instance.eit_days = config.get_number("eit-days", 3)?;
@@ -218,32 +218,36 @@ fn wrap() -> Result<()> {
         None => return Err(Error::from("output not defined")),
     };
 
-    for section in config.sections() {
-        match section.get_name() {
-            "multiplex" => {
-                instance.multiplex.onid = section.get_number("onid", instance.onid)?;
-                instance.multiplex.codepage = section.get_number("codepage", instance.codepage)?;
-                instance.multiplex.tsid = section.get_number("tsid", 1)?;
-                // TODO: custom xmltv
-            },
-            "service" => {
-                let mut service = Service::default();
-                match section.get_str("xmltv-id") {
-                    Some(v) => service.xmltv_id.push_str(v),
-                    None => {
-                        eprintln!("Warning: 'xmltv-id' option not defined for service at line {}", section.get_line());
-                        continue;
-                    },
-                };
-                service.epg_item_id = instance.multiplex.epg_item_id; // ?WTF
-                service.onid = instance.multiplex.onid;
-                service.tsid = instance.multiplex.tsid;
-                service.codepage = section.get_number("codepage", instance.multiplex.codepage)?;
-                service.pnr = section.get_number("pnr", 0)?;
-                // TODO: custom xmltv
-                instance.service_list.push(service);
-            },
-            _ => {},
+    for m in config.iter() {
+        if m.get_name() != "multiplex" || false == m.get_bool("enable", true)? {
+            continue;
+        }
+
+        instance.multiplex.onid = m.get_number("onid", instance.onid)?;
+        instance.multiplex.codepage = m.get_number("codepage", instance.codepage)?;
+        instance.multiplex.tsid = m.get_number("tsid", 1)?;
+        // TODO: custom xmltv
+
+        for s in m.iter() {
+            if s.get_name() != "service" {
+                continue;
+            }
+
+            let mut service = Service::default();
+            match s.get_str("xmltv-id") {
+                Some(v) => service.xmltv_id.push_str(v),
+                None => {
+                    eprintln!("Warning: 'xmltv-id' option not defined for service at line {}", s.get_line());
+                    continue;
+                },
+            };
+            service.epg_item_id = instance.multiplex.epg_item_id; // ?WTF
+            service.onid = instance.multiplex.onid;
+            service.tsid = instance.multiplex.tsid;
+            service.codepage = s.get_number("codepage", instance.multiplex.codepage)?;
+            service.pnr = s.get_number("pnr", 0)?;
+            // TODO: custom xmltv
+            instance.service_list.push(service);
         }
     }
 

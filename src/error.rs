@@ -1,11 +1,11 @@
-use ini;
+use config;
 use epg;
 use std::{result, io, fmt, num};
 
 #[derive(Debug)]
 pub enum Error {
     Custom(String),
-    Ini(ini::Error),
+    Config(config::Error),
     Epg(epg::Error),
     Io(io::Error),
     ParseInt(num::ParseIntError),
@@ -17,7 +17,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Error::Custom(ref e) => write!(f, "{}", e),
-            Error::Ini(ref e) => ini::Error::fmt(e, f),
+            Error::Config(ref e) => config::Error::fmt(e, f),
             Error::Epg(ref e) => epg::Error::fmt(e, f),
             Error::Io(ref e) => io::Error::fmt(e, f),
             Error::ParseInt(ref e) => num::ParseIntError::fmt(e, f),
@@ -37,9 +37,9 @@ impl From<String> for Error {
     }
 }
 
-impl From<ini::Error> for Error {
-    fn from(e: ini::Error) -> Self {
-        Error::Ini(e)
+impl From<config::Error> for Error {
+    fn from(e: config::Error) -> Self {
+        Error::Config(e)
     }
 }
 

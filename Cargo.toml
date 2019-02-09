@@ -7,7 +7,7 @@ edition = "2018"
 
 [dependencies]
 chrono = "0.4.6"
-ini = { path = "../libini" }
+config = { path = "../libconfig" }
 udp = { path = "../libudp" }
 mpegts = { path = "../libmpegts" }
 epg = { path = "../libepg" }
