@@ -203,10 +203,10 @@ fn wrap() -> Result<()> {
 
     // Parse config
     let config = Config::open(&arg)?;
-    instance.onid = config.get_number("onid", 1)?;
-    instance.codepage = config.get_number("codepage", 0)?;
-    instance.eit_days = config.get_number("eit-days", 3)?;
-    instance.eit_rate = config.get_number("eit-rate", 3000)?;
+    instance.onid = config.get("onid", 1)?;
+    instance.codepage = config.get("codepage", 0)?;
+    instance.eit_days = config.get("eit-days", 3)?;
+    instance.eit_rate = config.get("eit-rate", 3000)?;
 
     match config.get_str("xmltv") {
         Some(v) => instance.open_xmltv(v)?,
@@ -219,13 +219,13 @@ fn wrap() -> Result<()> {
     };
 
     for m in config.iter() {
-        if m.get_name() != "multiplex" || false == m.get_bool("enable", true)? {
+        if m.get_name() != "multiplex" || false == m.get("enable", true)? {
             continue;
         }
 
-        instance.multiplex.onid = m.get_number("onid", instance.onid)?;
-        instance.multiplex.codepage = m.get_number("codepage", instance.codepage)?;
-        instance.multiplex.tsid = m.get_number("tsid", 1)?;
+        instance.multiplex.onid = m.get("onid", instance.onid)?;
+        instance.multiplex.codepage = m.get("codepage", instance.codepage)?;
+        instance.multiplex.tsid = m.get("tsid", 1)?;
         // TODO: custom xmltv
 
         for s in m.iter() {
@@ -244,8 +244,8 @@ fn wrap() -> Result<()> {
             service.epg_item_id = instance.multiplex.epg_item_id; // ?WTF
             service.onid = instance.multiplex.onid;
             service.tsid = instance.multiplex.tsid;
-            service.codepage = s.get_number("codepage", instance.multiplex.codepage)?;
-            service.pnr = s.get_number("pnr", 0)?;
+            service.codepage = s.get("codepage", instance.multiplex.codepage)?;
+            service.pnr = s.get("pnr", 0)?;
             // TODO: custom xmltv
             instance.service_list.push(service);
         }
