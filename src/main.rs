@@ -151,6 +151,10 @@ impl Service {
         }
 
         if self.present.items.is_empty() {
+            if self.schedule.items.is_empty() {
+                return;
+            }
+
             self.present.items.push(self.schedule.items.remove(0));
         }
 
@@ -257,7 +261,6 @@ fn wrap() -> Result<()> {
         service.present.pnr = service.pnr;
         service.present.tsid = service.tsid;
         service.present.onid = service.onid;
-        service.present.split = true;
 
         // Schedule
         service.schedule.table_id = 0x50;
