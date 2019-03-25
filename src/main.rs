@@ -139,46 +139,32 @@ pub struct Service {
 
 
 impl Service {
-    #[inline]
-    fn check_first_event(eit: &Eit, current_time: u64) -> bool {
-        if let Some(event) = eit.items.first() {
-            if current_time >= event.start + u64::from(event.duration) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    fn clear_eit(eit: &mut Eit, current_time: u64) {
-        let mut version_up = false;
-
-        while ! Service::check_first_event(eit, current_time) {
-            eit.items.remove(0);
-            version_up = true;
-        }
-
-        if version_up {
-            eit.version = (eit.version + 1) & 0x1F;
-        }
-    }
-
     pub fn clear(&mut self) {
         let current_time = chrono::Utc::now().timestamp() as u64;
 
-        Service::clear_eit(&mut self.present, current_time);
-        Service::clear_eit(&mut self.schedule, current_time);
-
-        if self.present.items.len() != 2 {
-            while self.present.items.len() != 2 && self.schedule.items.len() > 0 {
-                self.present.items.push(self.schedule.items.remove(0));
+        if ! self.present.items.is_empty() {
+            let event = self.present.items.first().unwrap();
+            if event.start + u64::from(event.duration) > current_time {
+                return;
             }
-
-            if let Some(item) = self.present.items.first_mut() {
-                if current_time >= item.start {
-                    item.status = 4;
-                }
-            }
+            self.present.items.remove(0);
         }
+
+        if self.present.items.is_empty() {
+            self.present.items.push(self.schedule.items.remove(0));
+        }
+
+        let event = self.present.items.first().unwrap();
+        if event.start > current_time {
+            return;
+        }
+
+        if ! self.schedule.items.is_empty() {
+            self.present.items.push(self.schedule.items.remove(0));
+        }
+
+        let mut event = self.present.items.first_mut().unwrap();
+        event.status = 4;
     }
 }
 
@@ -271,6 +257,7 @@ fn wrap() -> Result<()> {
         service.present.pnr = service.pnr;
         service.present.tsid = service.tsid;
         service.present.onid = service.onid;
+        service.present.split = true;
 
         // Schedule
         service.schedule.table_id = 0x50;
