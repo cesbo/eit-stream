@@ -1,15 +1,30 @@
-use std::{env, time, thread, cmp};
+use std::{
+    env,
+    time,
+    thread,
+    cmp,
+};
 
 use chrono;
 use epg::Epg;
 use mpegts::ts;
-use mpegts::psi::{EIT_PID, Eit, EitItem, PsiDemux};
+use mpegts::psi::{
+    EIT_PID,
+    Eit,
+    EitItem,
+};
 use udp::UdpSocket;
 
 mod error;
-use error::{Error, Result};
+use error::{
+    Error,
+    Result,
+};
 
-use config::Config;
+use config::{
+    Config,
+    Schema,
+};
 
 
 include!(concat!(env!("OUT_DIR"), "/build.rs"));
@@ -26,6 +41,7 @@ fn usage(program: &str) {
 OPTIONS:
     -v, --version       Version information
     -h, --help          Print this text
+    -H                  Configuration file format
 
 CONFIG:
     Path to configuration file
@@ -174,13 +190,89 @@ impl Service {
 
 
 fn wrap() -> Result<()> {
+    let codepage_validator = |s: &str| -> bool {
+        let v = s.parse::<usize>().unwrap_or(1000);
+        ((v <= 11) || (v >= 13 && v <= 15) || (v == 21))
+    };
+
+    // Schema
+    let mut schema_service = Schema::new("service",
+        "Service configuration. Multiplex contains one or more services");
+    schema_service.set("pnr",
+        "Program Number. Required. Should be in range 1 .. 65535",
+        true, Schema::range(1 .. 65535));
+    schema_service.set("xmltv-id",
+        "Program indentifier in the XMLTV. Required",
+        true, None);
+    schema_service.set("codepage",
+        "Redefine codepage for service. Default: multiplex codepage",
+        false, codepage_validator);
+
+    let mut schema_multiplex = Schema::new("multiplex",
+        "Multiplex configuration. App contains one or more multiplexes");
+    schema_multiplex.set("tsid",
+        "Transport Stream Identifier. Required. Range 1 .. 65535",
+        true, Schema::range(1 .. 65535));
+    schema_multiplex.set("codepage",
+        "Redefine codepage for multiplex. Default: app codepage",
+        false, codepage_validator);
+    schema_multiplex.push(schema_service);
+
+    let mut schema = Schema::new("",
+        "eit-stream - MPEG-TS EPG (Electronic Program Guide) streamer");
+    schema.set("xmltv",
+        "Full path to XMLTV file or http/https address. Required",
+        true, None);
+    // TODO: udp address validator
+    schema.set("output",
+        "UDP Address. Requried. Example: udp://239.255.1.1:10000",
+        true, None);
+    schema.set("onid",
+        "Original Network Identifier. Default: 1",
+        false, None);
+    schema.set("codepage",
+        "EPG Codepage. Default: 0 - Latin (ISO 6937). Available values:\n\
+        ; 1 - Western European (ISO 8859-1)\n\
+        ; 2 - Central European (ISO 8859-2)\n\
+        ; 3 - South European (ISO 8859-3)\n\
+        ; 4 - North European (ISO 8859-4)\n\
+        ; 5 - Cyrillic (ISO 8859-5)\n\
+        ; 6 - Arabic (ISO 8859-6)\n\
+        ; 7 - Greek (ISO 8859-7)\n\
+        ; 8 - Hebrew (ISO 8859-8)\n\
+        ; 9 - Turkish (ISO 8859-9)\n\
+        ; 10 - Nordic (ISO 8859-10)\n\
+        ; 11 - Thai (ISO 8859-11)\n\
+        ; 13 - Baltic Rim (ISO 8859-13)\n\
+        ; 14 - Celtic (ISO 8859-14)\n\
+        ; 15 - Western European (ISO 8859-15)\n\
+        ; 21 - UTF-8",
+        false, codepage_validator);
+    schema.set("eit-days",
+        "How many days includes into EPG schedule. Range: 1 .. 7. Default: 3",
+        false, Schema::range(1 .. 7));
+    schema.set("eit-rate",
+        "Limit EPG output bitrate in kbit/s. Range: 100 .. 20000. Default: 3000",
+        false, Schema::range(100 .. 20000));
+    schema.push(schema_multiplex);
+
     // Parse Options
     let mut args = env::args();
     let program = args.next().unwrap();
     let arg = match args.next() {
         Some(v) => match v.as_ref() {
-            "-v" | "--version" => { version(); return Ok(()); },
-            "-h" | "--help" => { usage(&program); return Ok(()); },
+            "-v" | "--version" => {
+                version();
+                return Ok(());
+            },
+            "-h" | "--help" => {
+                usage(&program);
+                return Ok(());
+            },
+            "-H" => {
+                println!("Configuration file format:\n\n{}", &schema.info());
+                return Ok(());
+            },
             _ => v,
         },
         None => {
@@ -193,6 +285,8 @@ fn wrap() -> Result<()> {
 
     // Parse config
     let config = Config::open(&arg)?;
+    schema.check(&config)?;
+
     instance.onid = config.get("onid", 1)?;
     instance.codepage = config.get("codepage", 0)?;
     instance.eit_days = config.get("eit-days", 3)?;

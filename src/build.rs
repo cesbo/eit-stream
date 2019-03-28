@@ -13,7 +13,7 @@ fn main() {
         .arg("HEAD")
         .output().unwrap();
     let commit = String::from_utf8(output.stdout).unwrap();
-    let commit = commit.trim_right();
+    let commit = commit.trim_end();
 
     let info = format!("pub static COMMIT: &'static str = \"{}\";\n", commit);
     f.write(info.as_bytes()).unwrap();
