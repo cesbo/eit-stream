@@ -1,17 +1,26 @@
 [package]
 name = "eit-stream"
 version = "0.1.0"
-authors = ["Andrey Dyldin <and@cesbo.com>"]
+authors = ["Cesbo Developers Team"]
 build = "src/build.rs"
 edition = "2018"
 
 [dependencies]
 error-rules = "0.2"
-chrono = "0.4.6"
+chrono = "0.4"
 config = { path = "../libconfig" }
 udp = { path = "../libudp" }
 mpegts = { path = "../libmpegts" }
 epg = { path = "../libepg" }
+
+[features]
+# Build OpenSSL statically
+openssl-static = ["openssl-sys"]
+
+[dependencies.openssl-sys]
+optional = true
+version = "*"
+features = ["vendored"]
 
 [profile.release]
 panic = "abort"

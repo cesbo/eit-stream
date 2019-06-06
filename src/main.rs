@@ -463,6 +463,6 @@ fn wrap() -> Result<()> {
 
 fn main() {
     if let Err(e) = wrap() {
-        println!("Error: {}", e.to_string());
+        println!("{}", e.to_string());
     }
 }
