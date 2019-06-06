@@ -14,13 +14,7 @@ mpegts = { path = "../libmpegts" }
 epg = { path = "../libepg" }
 
 [features]
-# Build OpenSSL statically
-openssl-static = ["openssl-sys"]
-
-[dependencies.openssl-sys]
-optional = true
-version = "*"
-features = ["vendored"]
+static = ["epg/static"]
 
 [profile.release]
 panic = "abort"
