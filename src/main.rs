@@ -1,4 +1,8 @@
+#[macro_use]
+extern crate error_rules;
+
 use std::{
+    io,
     env,
     time,
     thread,
@@ -6,25 +10,49 @@ use std::{
 };
 
 use chrono;
-use epg::Epg;
-use mpegts::ts;
-use mpegts::psi::{
-    EIT_PID,
-    Eit,
-    EitItem,
-};
-use udp::UdpSocket;
 
-mod error;
-use error::{
-    Error,
-    Result,
+use epg::{
+    Epg,
+    EpgError,
 };
+
+use mpegts::{
+    ts,
+    psi::{
+        EIT_PID,
+        Eit,
+        EitItem,
+        PsiDemux,
+    },
+};
+
+use udp::UdpSocket;
 
 use config::{
     Config,
     Schema,
+    ConfigError,
 };
+
+
+#[derive(Debug, Error)]
+pub enum AppError {
+    #[error_from("App: {}", 0)]
+    Io(io::Error),
+    #[error_from("App: {}", 0)]
+    Epg(EpgError),
+    #[error_from("App: {}", 0)]
+    Config(ConfigError),
+    #[error_kind("App: unknown output format")]
+    UnknownOutput,
+    #[error_kind("App: output not defined")]
+    MissingOutput,
+    #[error_kind("App: xmltv not defined")]
+    MissingXmltv,
+}
+
+
+type Result<T> = std::result::Result<T, AppError>;
 
 
 include!(concat!(env!("OUT_DIR"), "/build.rs"));
@@ -65,15 +93,14 @@ impl Default for Output {
 
 impl Output {
     pub fn open(addr: &str) -> Result<Self> {
+        // TODO: remove collect()
         let dst = addr.splitn(2, "://").collect::<Vec<&str>>();
         match dst[0] {
             "udp" => {
                 let s = UdpSocket::open(dst[1])?;
                 Ok(Output::Udp(s))
             },
-            _ => {
-                Err(Error::from(format!("unknown output type [{}]", dst[0])))
-            }
+            _ => Err(AppError::UnknownOutput),
         }
     }
 
@@ -277,7 +304,7 @@ fn wrap() -> Result<()> {
         },
         None => {
             usage(&program);
-            return Err(Error::from("Path to configuration file requried"));
+            return Ok(());
         },
     };
 
@@ -292,15 +319,8 @@ fn wrap() -> Result<()> {
     instance.eit_days = config.get("eit-days", 3)?;
     instance.eit_rate = config.get("eit-rate", 3000)?;
 
-    match config.get_str("xmltv") {
-        Some(v) => instance.open_xmltv(v)?,
-        None => return Err(Error::from("xmltv not defined")),
-    };
-
-    match config.get_str("output") {
-        Some(v) => instance.open_output(v)?,
-        None => return Err(Error::from("output not defined")),
-    };
+    instance.open_xmltv(config.get_str("xmltv").ok_or(AppError::MissingXmltv)?)?;
+    instance.open_output(config.get_str("output").ok_or(AppError::MissingOutput)?)?;
 
     for m in config.iter() {
         if m.get_name() != "multiplex" || false == m.get("enable", true)? {
