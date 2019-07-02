@@ -36,18 +36,19 @@ use config::{
 
 
 #[derive(Debug, Error)]
-pub enum AppError {
-    #[error_from("App: {}", 0)]
+#[error_prefix = "App"]
+enum AppError {
+    #[error_from]
     Io(io::Error),
-    #[error_from("App: {}", 0)]
+    #[error_from]
     Epg(EpgError),
-    #[error_from("App: {}", 0)]
+    #[error_from]
     Config(ConfigError),
-    #[error_kind("App: unknown output format")]
+    #[error_kind("unknown output format")]
     UnknownOutput,
-    #[error_kind("App: output not defined")]
+    #[error_kind("output not defined")]
     MissingOutput,
-    #[error_kind("App: xmltv not defined")]
+    #[error_kind("xmltv not defined")]
     MissingXmltv,
 }
 
@@ -78,7 +79,7 @@ CONFIG:
 
 
 #[derive(Debug)]
-pub enum Output {
+enum Output {
     None,
     Udp(UdpSocket),
 }
@@ -92,7 +93,7 @@ impl Default for Output {
 
 
 impl Output {
-    pub fn open(addr: &str) -> Result<Self> {
+    fn open(addr: &str) -> Result<Self> {
         // TODO: remove collect()
         let dst = addr.splitn(2, "://").collect::<Vec<&str>>();
         match dst[0] {
@@ -104,7 +105,7 @@ impl Output {
         }
     }
 
-    pub fn send(&self, data: &[u8]) -> Result<()> {
+    fn send(&self, data: &[u8]) -> Result<()> {
         match self {
             Output::Udp(ref udp) => {
                 udp.sendto(data)?;
@@ -113,66 +114,94 @@ impl Output {
         };
         Ok(())
     }
-
-    pub fn is_open(&self) -> bool {
-        match self {
-            Output::None => false,
-            _ => true,
-        }
-    }
 }
 
 
 #[derive(Default, Debug)]
-pub struct Instance {
-    pub epg_list: Vec<Epg>,
-    pub output: Output,
+struct Instance {
+    epg_list: Vec<Epg>,
+    output: Output,
 
-    pub multiplex: Multiplex,
-    pub service_list: Vec<Service>,
+    multiplex: Multiplex,
+    service_list: Vec<Service>,
 
-    pub onid: u16,
-    pub codepage: u8,
-    pub eit_days: usize,
-    pub eit_rate: usize,
+    onid: u16,
+    codepage: u8,
+    eit_days: usize,
+    eit_rate: usize,
 }
 
 
 impl Instance {
-    pub fn open_xmltv(&mut self, path: &str) -> Result<()> {
+    fn open_xmltv(&mut self, path: &str) -> Result<()> {
         let mut epg = Epg::default();
         epg.load(path)?;
         self.epg_list.push(epg);
         Ok(())
     }
 
-    pub fn open_output(&mut self, addr: &str) -> Result<()> {
+    fn open_output(&mut self, addr: &str) -> Result<()> {
         self.output = Output::open(addr)?;
+        Ok(())
+    }
+
+    fn parse_config(&mut self, config: &Config) -> Result<()> {
+        if ! config.get("enable", true)? {
+            return Ok(())
+        }
+
+        self.multiplex.onid = config.get("onid", self.onid)?;
+        self.multiplex.codepage = config.get("codepage", self.codepage)?;
+        self.multiplex.tsid = config.get("tsid", 1)?;
+        // TODO: custom xmltv
+
+        for s in config.iter() {
+            if s.get_name() != "service" {
+                continue;
+            }
+
+            let mut service = Service::default();
+            match s.get_str("xmltv-id") {
+                Some(v) => service.xmltv_id.push_str(v),
+                None => {
+                    eprintln!("Warning: 'xmltv-id' option not defined for service at line {}", s.get_line());
+                    continue;
+                },
+            };
+            service.epg_item_id = self.multiplex.epg_item_id; // ?WTF
+            service.onid = self.multiplex.onid;
+            service.tsid = self.multiplex.tsid;
+            service.codepage = s.get("codepage", self.multiplex.codepage)?;
+            service.pnr = s.get("pnr", 0)?;
+            // TODO: custom xmltv
+            self.service_list.push(service);
+        }
+
         Ok(())
     }
 }
 
 
 #[derive(Default, Debug)]
-pub struct Multiplex {
-    pub epg_item_id: usize,
+struct Multiplex {
+    epg_item_id: usize,
 
-    pub onid: u16,
-    pub tsid: u16,
-    pub codepage: u8,
+    onid: u16,
+    tsid: u16,
+    codepage: u8,
 }
 
 
 #[derive(Default, Debug)]
-pub struct Service {
-    pub epg_item_id: usize,
+struct Service {
+    epg_item_id: usize,
 
-    pub onid: u16,
-    pub tsid: u16,
-    pub codepage: u8,
+    onid: u16,
+    tsid: u16,
+    codepage: u8,
 
-    pub pnr: u16,
-    pub xmltv_id: String,
+    pnr: u16,
+    xmltv_id: String,
 
     present: Eit,
     schedule: Eit,
@@ -182,7 +211,7 @@ pub struct Service {
 
 
 impl Service {
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         let current_time = chrono::Utc::now().timestamp() as u64;
 
         if ! self.present.items.is_empty() {
@@ -216,13 +245,12 @@ impl Service {
 }
 
 
-fn wrap() -> Result<()> {
+fn init_schema() -> Schema {
     let codepage_validator = |s: &str| -> bool {
         let v = s.parse::<usize>().unwrap_or(1000);
         ((v <= 11) || (v >= 13 && v <= 15) || (v == 21))
     };
 
-    // Schema
     let mut schema_service = Schema::new("service",
         "Service configuration. Multiplex contains one or more services");
     schema_service.set("pnr",
@@ -281,38 +309,53 @@ fn wrap() -> Result<()> {
     schema.set("eit-rate",
         "Limit EPG output bitrate in kbit/s. Range: 100 .. 20000. Default: 3000",
         false, Schema::range(100 .. 20000));
+
     schema.push(schema_multiplex);
 
-    // Parse Options
+    schema
+}
+
+
+fn load_config() -> Result<Config> {
+    use std::process::exit;
+
+    let mut schema = init_schema();
+
     let mut args = env::args();
     let program = args.next().unwrap();
     let arg = match args.next() {
         Some(v) => match v.as_ref() {
             "-v" | "--version" => {
                 version();
-                return Ok(());
+                exit(0);
             },
             "-h" | "--help" => {
                 usage(&program);
-                return Ok(());
+                exit(0);
             },
             "-H" => {
                 println!("Configuration file format:\n\n{}", &schema.info());
-                return Ok(());
+                exit(0);
             },
             _ => v,
         },
         None => {
             usage(&program);
-            return Ok(());
+            exit(0);
         },
     };
 
-    let mut instance = Instance::default();
-
-    // Parse config
     let config = Config::open(&arg)?;
     schema.check(&config)?;
+
+    Ok(config)
+}
+
+
+fn wrap() -> Result<()> {
+    let config = load_config()?;
+
+    let mut instance = Instance::default();
 
     instance.onid = config.get("onid", 1)?;
     instance.codepage = config.get("codepage", 0)?;
@@ -323,35 +366,9 @@ fn wrap() -> Result<()> {
     instance.open_output(config.get_str("output").ok_or(AppError::MissingOutput)?)?;
 
     for m in config.iter() {
-        if m.get_name() != "multiplex" || false == m.get("enable", true)? {
-            continue;
-        }
-
-        instance.multiplex.onid = m.get("onid", instance.onid)?;
-        instance.multiplex.codepage = m.get("codepage", instance.codepage)?;
-        instance.multiplex.tsid = m.get("tsid", 1)?;
-        // TODO: custom xmltv
-
-        for s in m.iter() {
-            if s.get_name() != "service" {
-                continue;
-            }
-
-            let mut service = Service::default();
-            match s.get_str("xmltv-id") {
-                Some(v) => service.xmltv_id.push_str(v),
-                None => {
-                    eprintln!("Warning: 'xmltv-id' option not defined for service at line {}", s.get_line());
-                    continue;
-                },
-            };
-            service.epg_item_id = instance.multiplex.epg_item_id; // ?WTF
-            service.onid = instance.multiplex.onid;
-            service.tsid = instance.multiplex.tsid;
-            service.codepage = s.get("codepage", instance.multiplex.codepage)?;
-            service.pnr = s.get("pnr", 0)?;
-            // TODO: custom xmltv
-            instance.service_list.push(service);
+        match m.get_name() {
+            "multiplex" => instance.parse_config(m)?,
+            _ => {}
         }
     }
 
@@ -399,7 +416,7 @@ fn wrap() -> Result<()> {
 
     // Main loop
 
-    let mut cc = 0;
+    let mut eit_cc = 0;
     let mut ts = Vec::<u8>::new();
 
     let rate_limit = instance.eit_rate * 1000 / 8;
@@ -413,7 +430,7 @@ fn wrap() -> Result<()> {
         while present_skip < instance.service_list.len() {
             let service = &mut instance.service_list[present_skip];
             service.clear();
-            service.present.demux(EIT_PID, &mut cc, &mut ts);
+            service.present.demux(EIT_PID, &mut eit_cc, &mut ts);
             present_skip += 1;
             if ts.len() >= rate_limit {
                 break;
@@ -425,7 +442,7 @@ fn wrap() -> Result<()> {
 
             while schedule_skip < instance.service_list.len() {
                 let service = &instance.service_list[schedule_skip];
-                service.schedule.demux(EIT_PID, &mut cc, &mut ts);
+                service.schedule.demux(EIT_PID, &mut eit_cc, &mut ts);
                 schedule_skip += 1;
                 if ts.len() >= rate_limit {
                     break;
