@@ -3,10 +3,10 @@ extern crate error_rules;
 
 use std::{
     io,
-    env,
     time,
     thread,
     cmp,
+    collections::HashMap,
 };
 
 use chrono;
@@ -19,12 +19,10 @@ use epg::{
 use mpegts::{
     ts,
     psi::{
-        EIT_PID,
+        self,
+        PsiDemux,
         Eit,
         EitItem,
-        PsiDemux,
-        TDT_PID,
-        TOT_PID,
         Tdt,
         Tot,
         Desc58,
@@ -175,15 +173,18 @@ impl TdtTot {
 
     fn demux(&mut self, dst: &mut Vec<u8>) {
         self.update();
-        self.tdt.demux(TDT_PID, &mut self.cc, dst);
-        self.tot.demux(TOT_PID, &mut self.cc, dst);
+        self.tdt.demux(psi::TDT_PID, &mut self.cc, dst);
+        self.tot.demux(psi::TOT_PID, &mut self.cc, dst);
     }
 }
 
 
 #[derive(Default, Debug)]
 struct Instance {
+    epg_item_id: usize,
     epg_list: Vec<Epg>,
+    epg_map: HashMap<String, usize>,
+
     output: Output,
 
     multiplex: Multiplex,
@@ -199,11 +200,23 @@ struct Instance {
 
 
 impl Instance {
-    fn open_xmltv(&mut self, path: &str) -> Result<()> {
+    fn open_xmltv(&mut self, config: &Config, def: usize) -> Result<usize> {
+        let path = match config.get_str("xmltv") {
+            Some(v) => v,
+            None => return Ok(def),
+        };
+
+        if let Some(&v) = self.epg_map.get(path) {
+            return Ok(v);
+        }
+
         let mut epg = Epg::default();
         epg.load(path)?;
+        let v = self.epg_list.len();
         self.epg_list.push(epg);
-        Ok(())
+        self.epg_map.insert(path.to_owned(), v);
+
+        Ok(v)
     }
 
     fn open_output(&mut self, addr: &str) -> Result<()> {
@@ -219,7 +232,7 @@ impl Instance {
         self.multiplex.onid = config.get("onid", self.onid)?;
         self.multiplex.codepage = config.get("codepage", self.codepage)?;
         self.multiplex.tsid = config.get("tsid", 1)?;
-        // TODO: custom xmltv
+        self.multiplex.epg_item_id = self.open_xmltv(&config, self.epg_item_id)?;
 
         for s in config.iter() {
             if s.get_name() != "service" {
@@ -234,7 +247,12 @@ impl Instance {
                     continue;
                 },
             };
-            service.epg_item_id = self.multiplex.epg_item_id; // ?WTF
+
+            service.epg_item_id = self.open_xmltv(s, self.multiplex.epg_item_id)?;
+            if service.epg_item_id == usize::max_value() {
+                return Err(AppError::MissingXmltv);
+            }
+
             service.onid = self.multiplex.onid;
             service.tsid = self.multiplex.tsid;
             service.codepage = s.get("codepage", self.multiplex.codepage)?;
@@ -381,8 +399,8 @@ fn init_schema() -> Schema {
     let mut schema = Schema::new("",
         "eit-stream - MPEG-TS EPG (Electronic Program Guide) streamer");
     schema.set("xmltv",
-        "Full path to XMLTV file or http/https address. Required",
-        true, None);
+        "Full path to XMLTV file or http/https address",
+        false, None);
     // TODO: udp address validator
     schema.set("output",
         "UDP Address. Requried. Example: udp://239.255.1.1:10000",
@@ -427,7 +445,7 @@ fn load_config() -> Result<Config> {
 
     let mut schema = init_schema();
 
-    let mut args = env::args();
+    let mut args = std::env::args();
     let program = args.next().unwrap();
     let arg = match args.next() {
         Some(v) => match v.as_ref() {
@@ -468,7 +486,7 @@ fn wrap() -> Result<()> {
     instance.eit_days = config.get("eit-days", 3)?;
     instance.eit_rate = config.get("eit-rate", 3000)?;
 
-    instance.open_xmltv(config.get_str("xmltv").ok_or(AppError::MissingXmltv)?)?;
+    instance.epg_item_id = instance.open_xmltv(&config, usize::max_value())?;
     instance.open_output(config.get_str("output").ok_or(AppError::MissingOutput)?)?;
 
     for m in config.iter() {
@@ -541,7 +559,7 @@ fn wrap() -> Result<()> {
         while present_skip < instance.service_list.len() {
             let service = &mut instance.service_list[present_skip];
             service.clear();
-            service.present.demux(EIT_PID, &mut eit_cc, &mut ts);
+            service.present.demux(psi::EIT_PID, &mut eit_cc, &mut ts);
             present_skip += 1;
             if ts.len() >= rate_limit {
                 break;
@@ -553,7 +571,7 @@ fn wrap() -> Result<()> {
 
             while schedule_skip < instance.service_list.len() {
                 let service = &instance.service_list[schedule_skip];
-                service.schedule.demux(EIT_PID, &mut eit_cc, &mut ts);
+                service.schedule.demux(psi::EIT_PID, &mut eit_cc, &mut ts);
                 schedule_skip += 1;
                 if ts.len() >= rate_limit {
                     break;
