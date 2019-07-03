@@ -257,7 +257,6 @@ impl Instance {
             service.tsid = self.multiplex.tsid;
             service.codepage = s.get("codepage", self.multiplex.codepage)?;
             service.pnr = s.get("pnr", 0)?;
-            // TODO: custom xmltv
             self.service_list.push(service);
         }
 
@@ -376,6 +375,9 @@ fn init_schema() -> Schema {
     schema_service.set("codepage",
         "Redefine codepage for service. Default: multiplex codepage",
         false, codepage_validator);
+    schema_service.set("xmltv",
+        "Redefine XMLTV source for service. Default: multiplex xmltv",
+        false, None);
 
     let mut schema_multiplex = Schema::new("multiplex",
         "Multiplex configuration. App contains one or more multiplexes");
@@ -385,6 +387,9 @@ fn init_schema() -> Schema {
     schema_multiplex.set("codepage",
         "Redefine codepage for multiplex. Default: app codepage",
         false, codepage_validator);
+    schema_multiplex.set("xmltv",
+        "Redefine XMLTV source for multiplex. Default: app xmltv",
+        false, None);
     schema_multiplex.push(schema_service);
 
     let mut schema_tdt_tot = Schema::new("tdt-tot",
