@@ -23,7 +23,14 @@ use mpegts::{
         Eit,
         EitItem,
         PsiDemux,
+        TDT_PID,
+        TOT_PID,
+        Tdt,
+        Tot,
+        Desc58,
+        Desc58i,
     },
+    textcode,
 };
 
 use udp::UdpSocket;
@@ -117,6 +124,63 @@ impl Output {
 }
 
 
+#[derive(Debug, Default)]
+struct TdtTot {
+    cc: u8,
+    tdt: Tdt,
+    tot: Tot,
+}
+
+
+impl TdtTot {
+    fn parse_config(&mut self, config: &Config) -> Result<()> {
+        let country = config.get_str("country").unwrap_or("   ");
+
+        let (offset, offset_polarity) = {
+            let offset = config.get_str("offset").unwrap_or("0");
+            match offset.as_bytes()[0] {
+                b'+' => (offset[1 ..].parse::<u16>().unwrap(), 0),
+                b'-' => (offset[1 ..].parse::<u16>().unwrap(), 1),
+                _ => (0, 0),
+            }
+        };
+
+        if self.tot.descriptors.is_empty() {
+            self.tot.descriptors.push(Desc58::default());
+        }
+
+        let desc = self.tot.descriptors
+            .get_mut(0).unwrap()
+            .downcast_mut::<Desc58>();
+
+        desc.items.push(Desc58i {
+            country_code: textcode::StringDVB::from_str(country, textcode::ISO6937),
+            region_id: 0,
+            offset_polarity,
+            offset,
+            time_of_change: 0,
+            next_offset: 0,
+        });
+
+        Ok(())
+    }
+
+    fn update(&mut self) {
+        let timestamp = time::SystemTime::now()
+            .duration_since(time::UNIX_EPOCH).unwrap()
+            .as_secs();
+        self.tdt.time = timestamp;
+        self.tot.time = timestamp;
+    }
+
+    fn demux(&mut self, dst: &mut Vec<u8>) {
+        self.update();
+        self.tdt.demux(TDT_PID, &mut self.cc, dst);
+        self.tot.demux(TOT_PID, &mut self.cc, dst);
+    }
+}
+
+
 #[derive(Default, Debug)]
 struct Instance {
     epg_list: Vec<Epg>,
@@ -129,6 +193,8 @@ struct Instance {
     codepage: u8,
     eit_days: usize,
     eit_rate: usize,
+
+    tdt_tot: Option<TdtTot>,
 }
 
 
@@ -175,6 +241,18 @@ impl Instance {
             service.pnr = s.get("pnr", 0)?;
             // TODO: custom xmltv
             self.service_list.push(service);
+        }
+
+        Ok(())
+    }
+
+    fn parse_tdt_tot(&mut self, config: &Config) -> Result<()> {
+        if let Some(t) = &mut self.tdt_tot {
+            t.parse_config(config)?;
+        } else {
+            let mut t = TdtTot::default();
+            t.parse_config(config)?;
+            self.tdt_tot = Some(t);
         }
 
         Ok(())
@@ -251,6 +329,24 @@ fn init_schema() -> Schema {
         ((v <= 11) || (v >= 13 && v <= 15) || (v == 21))
     };
 
+    let country_validator = |s: &str| -> bool {
+        s.len() == 3
+    };
+
+    let offset_validator = |s: &str| -> bool {
+        if s.is_empty() { return false }
+        match s.as_bytes()[0] {
+            b'+' => s[1 ..].parse::<u16>()
+                .and_then(|v| Ok(v <= 720))
+                .unwrap_or(false),
+            b'-' => s[1 ..].parse::<u16>()
+                .and_then(|v| Ok(v <= 780))
+                .unwrap_or(false),
+            b'0' if s.len() == 1 => true,
+            _ => false,
+        }
+    };
+
     let mut schema_service = Schema::new("service",
         "Service configuration. Multiplex contains one or more services");
     schema_service.set("pnr",
@@ -272,6 +368,15 @@ fn init_schema() -> Schema {
         "Redefine codepage for multiplex. Default: app codepage",
         false, codepage_validator);
     schema_multiplex.push(schema_service);
+
+    let mut schema_tdt_tot = Schema::new("tdt-tot",
+        "Generate TDT/TOT tables");
+    schema_tdt_tot.set("country",
+        "Country code in ISO 3166-1 alpha-3 format",
+        false, country_validator);
+    schema_tdt_tot.set("offset",
+        "Offset time from UTC in the range between -720 minutes and +780 minutes. Default: 0",
+        false, offset_validator);
 
     let mut schema = Schema::new("",
         "eit-stream - MPEG-TS EPG (Electronic Program Guide) streamer");
@@ -310,6 +415,7 @@ fn init_schema() -> Schema {
         "Limit EPG output bitrate in kbit/s. Range: 100 .. 20000. Default: 3000",
         false, Schema::range(100 .. 20000));
 
+    schema.push(schema_tdt_tot);
     schema.push(schema_multiplex);
 
     schema
@@ -368,6 +474,7 @@ fn wrap() -> Result<()> {
     for m in config.iter() {
         match m.get_name() {
             "multiplex" => instance.parse_config(m)?,
+            "tdt-tot" => instance.parse_tdt_tot(m)?,
             _ => {}
         }
     }
@@ -417,9 +524,9 @@ fn wrap() -> Result<()> {
     // Main loop
 
     let mut eit_cc = 0;
-    let mut ts = Vec::<u8>::new();
 
     let rate_limit = instance.eit_rate * 1000 / 8;
+    let mut ts = Vec::<u8>::with_capacity(rate_limit);
 
     let mut present_skip = 0;
     let mut schedule_skip = 0;
@@ -427,6 +534,10 @@ fn wrap() -> Result<()> {
     let idle_delay = time::Duration::from_secs(1);
 
     loop {
+        if let Some(tdt_tot) = &mut instance.tdt_tot {
+            tdt_tot.demux(&mut ts);
+        }
+
         while present_skip < instance.service_list.len() {
             let service = &mut instance.service_list[present_skip];
             service.clear();
