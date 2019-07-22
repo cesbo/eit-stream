@@ -402,7 +402,7 @@ fn init_schema() -> Schema {
         false, offset_validator);
 
     let mut schema = Schema::new("",
-        "eit-stream - MPEG-TS EPG (Electronic Program Guide) streamer");
+        "eit-stream - MPEG-TS EPG (Electronic Program Guide) streamer\n");
     schema.set("xmltv",
         "Full path to XMLTV file or http/https address",
         false, None);
@@ -415,15 +415,15 @@ fn init_schema() -> Schema {
         false, None);
     schema.set("codepage",
         "EPG Codepage. Default: 0 - Latin (ISO 6937). Available values:\n\
-        ; 1 - Western European (ISO 8859-1)\n\
-        ; 2 - Central European (ISO 8859-2)\n\
-        ; 3 - South European (ISO 8859-3)\n\
-        ; 4 - North European (ISO 8859-4)\n\
-        ; 5 - Cyrillic (ISO 8859-5)\n\
-        ; 6 - Arabic (ISO 8859-6)\n\
-        ; 7 - Greek (ISO 8859-7)\n\
-        ; 8 - Hebrew (ISO 8859-8)\n\
-        ; 9 - Turkish (ISO 8859-9)\n\
+        ;  1 - Western European (ISO 8859-1)\n\
+        ;  2 - Central European (ISO 8859-2)\n\
+        ;  3 - South European (ISO 8859-3)\n\
+        ;  4 - North European (ISO 8859-4)\n\
+        ;  5 - Cyrillic (ISO 8859-5)\n\
+        ;  6 - Arabic (ISO 8859-6)\n\
+        ;  7 - Greek (ISO 8859-7)\n\
+        ;  8 - Hebrew (ISO 8859-8)\n\
+        ;  9 - Turkish (ISO 8859-9)\n\
         ; 10 - Nordic (ISO 8859-10)\n\
         ; 11 - Thai (ISO 8859-11)\n\
         ; 13 - Baltic Rim (ISO 8859-13)\n\
