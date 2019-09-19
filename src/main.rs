@@ -2,10 +2,15 @@
 extern crate error_rules;
 
 use std::{
-    io,
+    io::{
+        self,
+        BufWriter,
+        Write,
+    },
     time,
     thread,
     cmp,
+    fs::File,
     collections::HashMap,
 };
 
@@ -87,6 +92,7 @@ CONFIG:
 enum Output {
     None,
     Udp(UdpSocket),
+    File(BufWriter<File>),
 }
 
 
@@ -105,16 +111,23 @@ impl Output {
             "udp" => {
                 let s = UdpSocket::open(dst[1])?;
                 Ok(Output::Udp(s))
-            },
+            }
+            "file" => {
+                let file = File::create(dst[1])?;
+                Ok(Output::File(BufWriter::new(file)))
+            }
             _ => Err(AppError::UnknownOutput),
         }
     }
 
-    fn send(&self, data: &[u8]) -> Result<()> {
+    fn send(&mut self, data: &[u8]) -> Result<()> {
         match self {
-            Output::Udp(ref udp) => {
+            Output::Udp(udp) => {
                 udp.sendto(data)?;
-            },
+            }
+            Output::File(file) => {
+                file.write_all(data)?;
+            }
             Output::None => {},
         };
         Ok(())
@@ -132,10 +145,10 @@ struct TdtTot {
 
 impl TdtTot {
     fn parse_config(&mut self, config: &Config) -> Result<()> {
-        let country = config.get_str("country").unwrap_or("   ");
+        let country = config.get("country").unwrap_or("   ");
 
         let (offset, offset_polarity) = {
-            let offset = config.get_str("offset").unwrap_or("0");
+            let offset = config.get("offset").unwrap_or("0");
             match offset.as_bytes()[0] {
                 b'+' => (offset[1 ..].parse::<u16>().unwrap(), 0),
                 b'-' => (offset[1 ..].parse::<u16>().unwrap(), 1),
@@ -201,7 +214,7 @@ struct Instance {
 
 impl Instance {
     fn open_xmltv(&mut self, config: &Config, def: usize) -> Result<usize> {
-        let path = match config.get_str("xmltv") {
+        let path = match config.get("xmltv") {
             Some(v) => v,
             None => return Ok(def),
         };
@@ -225,13 +238,13 @@ impl Instance {
     }
 
     fn parse_config(&mut self, config: &Config) -> Result<()> {
-        if ! config.get("enable", true)? {
+        if ! config.get("enable").unwrap_or(true) {
             return Ok(())
         }
 
-        self.multiplex.onid = config.get("onid", self.onid)?;
-        self.multiplex.codepage = config.get("codepage", self.codepage)?;
-        self.multiplex.tsid = config.get("tsid", 1)?;
+        self.multiplex.onid = config.get("onid").unwrap_or(self.onid);
+        self.multiplex.codepage = config.get("codepage").unwrap_or(self.codepage);
+        self.multiplex.tsid = config.get("tsid").unwrap_or(1);
         self.multiplex.epg_item_id = self.open_xmltv(&config, self.epg_item_id)?;
 
         for s in config.iter() {
@@ -240,7 +253,7 @@ impl Instance {
             }
 
             let mut service = Service::default();
-            match s.get_str("xmltv-id") {
+            match s.get("xmltv-id") {
                 Some(v) => service.xmltv_id.push_str(v),
                 None => {
                     eprintln!("Warning: 'xmltv-id' option not defined for service at line {}", s.get_line());
@@ -255,8 +268,8 @@ impl Instance {
 
             service.onid = self.multiplex.onid;
             service.tsid = self.multiplex.tsid;
-            service.codepage = s.get("codepage", self.multiplex.codepage)?;
-            service.pnr = s.get("pnr", 0)?;
+            service.codepage = s.get("codepage").unwrap_or(self.multiplex.codepage);
+            service.pnr = s.get("pnr").unwrap_or(0);
             self.service_list.push(service);
         }
 
@@ -486,13 +499,17 @@ fn wrap() -> Result<()> {
 
     let mut instance = Instance::default();
 
-    instance.onid = config.get("onid", 1)?;
-    instance.codepage = config.get("codepage", 0)?;
-    instance.eit_days = config.get("eit-days", 3)?;
-    instance.eit_rate = config.get("eit-rate", 3000)?;
+    instance.onid = config.get("onid").unwrap_or(1);
+    instance.codepage = config.get("codepage").unwrap_or(0);
+    instance.eit_days = config.get("eit-days").unwrap_or(3);
+    instance.eit_rate = config.get("eit-rate").unwrap_or(3000);
 
     instance.epg_item_id = instance.open_xmltv(&config, usize::max_value())?;
-    instance.open_output(config.get_str("output").ok_or(AppError::MissingOutput)?)?;
+    match config.get("output") {
+        Some(v) => instance.open_output(v)?,
+        None => return Err(AppError::MissingOutput),
+    };
+
 
     for m in config.iter() {
         match m.get_name() {
