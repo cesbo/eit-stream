@@ -1,6 +1,6 @@
 [package]
 name = "eit-stream"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Cesbo Developers Team"]
 build = "src/build.rs"
 edition = "2018"
