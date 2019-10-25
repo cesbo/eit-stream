@@ -332,12 +332,11 @@ impl Service {
         }
 
         if self.present.items.is_empty() {
-            if self.schedule.items.is_empty() {
+            if let Some(item) = self.schedule.items.get(0) {
+                self.present.items.push(item.clone());
+            } else {
                 return;
             }
-
-            let item = self.schedule.items.get(0).unwrap().clone();
-            self.present.items.push(item);
         }
 
         let event = self.present.items.first().unwrap();
@@ -345,9 +344,8 @@ impl Service {
             return;
         }
 
-        if ! self.schedule.items.is_empty() {
-            let item = self.schedule.items.get(0).unwrap().clone();
-            self.present.items.push(item);
+        if let Some(item) = self.schedule.items.get(0) {
+            self.present.items.push(item.clone());
         }
 
         let mut event = self.present.items.first_mut().unwrap();
