@@ -328,6 +328,7 @@ impl Service {
                 return;
             }
             self.present.items.remove(0);
+            self.schedule.items.remove(0);
         }
 
         if self.present.items.is_empty() {
@@ -335,7 +336,8 @@ impl Service {
                 return;
             }
 
-            self.present.items.push(self.schedule.items.remove(0));
+            let item = self.schedule.items.get(0).unwrap().clone();
+            self.present.items.push(item);
         }
 
         let event = self.present.items.first().unwrap();
@@ -344,7 +346,8 @@ impl Service {
         }
 
         if ! self.schedule.items.is_empty() {
-            self.present.items.push(self.schedule.items.remove(0));
+            let item = self.schedule.items.get(0).unwrap().clone();
+            self.present.items.push(item);
         }
 
         let mut event = self.present.items.first_mut().unwrap();
