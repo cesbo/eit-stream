@@ -8,10 +8,10 @@ edition = "2018"
 [dependencies]
 error-rules = "0.2"
 chrono = "0.4"
-config = { path = "../libconfig" }
-udp = { path = "../libudp" }
-mpegts = { path = "../libmpegts" }
-epg = { path = "../libepg" }
+mpegts = { git = "ssh://git@github.com/cesbo/libconfig.git", branch = "master" }
+mpegts = { git = "ssh://git@github.com/cesbo/libudp.git", branch = "master" }
+mpegts = { git = "ssh://git@github.com/cesbo/libmpegts.git", branch = "master" }
+mpegts = { git = "ssh://git@github.com/cesbo/libepg.git", branch = "master" }
 
 [features]
 static = ["epg/static"]
