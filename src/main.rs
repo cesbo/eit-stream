@@ -357,7 +357,7 @@ impl Service {
 fn init_schema() -> Schema {
     let codepage_validator = |s: &str| -> bool {
         let v = s.parse::<usize>().unwrap_or(1000);
-        ((v <= 11) || (v >= 13 && v <= 15) || (v == 21))
+        (v <= 11) || (v >= 13 && v <= 15) || (v == 21)
     };
 
     let country_validator = |s: &str| -> bool {
