@@ -66,6 +66,9 @@ enum AppError {
 type Result<T> = std::result::Result<T, AppError>;
 
 
+const BLOCK_SIZE: usize = ts::PACKET_SIZE * 7;
+
+
 include!(concat!(env!("OUT_DIR"), "/build.rs"));
 
 
@@ -500,6 +503,19 @@ fn load_config() -> Result<Config> {
 }
 
 
+fn fill_null_ts(dst: &mut Vec<u8>) {
+    let remain = dst.len() % BLOCK_SIZE;
+    if remain == 0 {
+        return;
+    }
+
+    let padding = (BLOCK_SIZE - remain) / ts::PACKET_SIZE;
+    for _ in 0 .. padding {
+        dst.extend_from_slice(ts::NULL_PACKET);
+    }
+}
+
+
 fn wrap() -> Result<()> {
     let config = load_config()?;
 
@@ -582,12 +598,14 @@ fn wrap() -> Result<()> {
     loop {
         if let Some(tdt_tot) = &mut instance.tdt_tot {
             tdt_tot.demux(&mut ts);
+            fill_null_ts(&mut ts);
         }
 
         while present_skip < instance.service_list.len() {
             let service = &mut instance.service_list[present_skip];
             service.clear();
             service.present.demux(psi::EIT_PID, &mut eit_cc, &mut ts);
+            fill_null_ts(&mut ts);
             present_skip += 1;
             if ts.len() >= rate_limit {
                 break;
@@ -600,6 +618,7 @@ fn wrap() -> Result<()> {
             while schedule_skip < instance.service_list.len() {
                 let service = &instance.service_list[schedule_skip];
                 service.schedule.demux(psi::EIT_PID, &mut eit_cc, &mut ts);
+                fill_null_ts(&mut ts);
                 schedule_skip += 1;
                 if ts.len() >= rate_limit {
                     break;
@@ -622,7 +641,7 @@ fn wrap() -> Result<()> {
         // TODO: UDP output
         let mut skip = 0;
         while skip < ts.len() {
-            let pkt_len = cmp::min(ts.len() - skip, 1316);
+            let pkt_len = cmp::min(ts.len() - skip, BLOCK_SIZE);
             let next = skip + pkt_len;
             if next > rate_limit { break };
             instance.output.send(&ts[skip..next]).unwrap();
