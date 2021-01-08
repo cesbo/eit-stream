@@ -67,6 +67,7 @@ type Result<T> = std::result::Result<T, AppError>;
 
 
 const BLOCK_SIZE: usize = ts::PACKET_SIZE * 7;
+const IDLE_DELAY: time::Duration = time::Duration::from_secs(1);
 
 
 include!(concat!(env!("OUT_DIR"), "/build.rs"));
@@ -209,7 +210,7 @@ struct Instance {
     onid: u16,
     codepage: u8,
     eit_days: usize,
-    eit_rate: usize,
+    eit_rate: Option<usize>,
 
     tdt_tot: Option<TdtTot>,
 }
@@ -332,6 +333,9 @@ impl Service {
             }
             self.present.items.remove(0);
             self.schedule.items.remove(0);
+
+            self.present.version = (self.present.version + 1) % 32;
+            self.schedule.version = (self.schedule.version + 1) % 32;
         }
 
         if self.present.items.is_empty() {
@@ -457,8 +461,8 @@ fn init_schema() -> Schema {
         "How many days includes into EPG schedule. Range: 1 .. 7. Default: 3",
         false, Schema::range(1 .. 7));
     schema.set("eit-rate",
-        "Limit EPG output bitrate in kbit/s. Range: 100 .. 20000. Default: 3000",
-        false, Schema::range(100 .. 20000));
+        "Limit EPG output bitrate in kbit/s. Range: 15 .. 20000",
+        false, Schema::range(15 .. 20000));
 
     schema.push(schema_tdt_tot);
     schema.push(schema_multiplex);
@@ -524,7 +528,7 @@ fn wrap() -> Result<()> {
     instance.onid = config.get("onid").unwrap_or(1);
     instance.codepage = config.get("codepage").unwrap_or(0);
     instance.eit_days = config.get("eit-days").unwrap_or(3);
-    instance.eit_rate = config.get("eit-rate").unwrap_or(3000);
+    instance.eit_rate = config.get("eit-rate");
 
     instance.epg_item_id = instance.open_xmltv(&config, usize::max_value())?;
     match config.get("output") {
@@ -586,70 +590,71 @@ fn wrap() -> Result<()> {
     // Main loop
 
     let mut eit_cc = 0;
+    // let rate_limit = match instance.eit_rate {
+    //     Some(v) => v * 1000 / 8,
+    //     None => 15 * 1000 / 8, /* TODO: instance.service_list */
+    // };
 
-    let rate_limit = instance.eit_rate * 1000 / 8;
-    let mut ts = Vec::<u8>::with_capacity(rate_limit);
-
-    let mut present_skip = 0;
-    let mut schedule_skip = 0;
-
-    let idle_delay = time::Duration::from_secs(1);
+    let mut ts_buffer = Vec::<u8>::with_capacity(instance.service_list.len() * ts::PACKET_SIZE * 20);
 
     loop {
-        if let Some(tdt_tot) = &mut instance.tdt_tot {
-            tdt_tot.demux(&mut ts);
-            fill_null_ts(&mut ts);
+        for service in &mut instance.service_list {
+            service.clear();
+
+            let mut present_psi_list = service.present.psi_list_assemble();
+            if present_psi_list.is_empty() {
+                continue;
+            }
+
+            let mut schedule_psi_list = service.schedule.psi_list_assemble();
+
+            if let Some(tdt_tot) = &mut instance.tdt_tot {
+                tdt_tot.demux(&mut ts_buffer);
+                fill_null_ts(&mut ts_buffer);
+            }
+
+            for p in &mut present_psi_list {
+                p.pid = psi::EIT_PID;
+                p.cc = eit_cc;
+                p.demux(&mut ts_buffer);
+                eit_cc = p.cc;
+
+                fill_null_ts(&mut ts_buffer);
+            }
+
+            for p in &mut schedule_psi_list {
+                p.pid = psi::EIT_PID;
+                p.cc = eit_cc;
+                p.demux(&mut ts_buffer);
+                eit_cc = p.cc;
+
+                fill_null_ts(&mut ts_buffer);
+            }
         }
 
-        while present_skip < instance.service_list.len() {
-            let service = &mut instance.service_list[present_skip];
-            service.clear();
-            service.present.demux(psi::EIT_PID, &mut eit_cc, &mut ts);
-            fill_null_ts(&mut ts);
-            present_skip += 1;
-            if ts.len() >= rate_limit {
+        if ts_buffer.len() == 0 {
+            thread::sleep(IDLE_DELAY);
+            continue;
+        }
+
+        // let packets = (ts_buffer.len() + ts::PACKET_SIZE - 1) / ts::PACKET_SIZE;
+        let pps = time::Duration::from_millis(30);
+
+        let mut skip = 0;
+        loop {
+            let pkt_len = cmp::min(ts_buffer.len() - skip, BLOCK_SIZE);
+            let next = skip + pkt_len;
+            instance.output.send(&ts_buffer[skip..next]).unwrap();
+            thread::sleep(pps);
+
+            if next < ts_buffer.len() {
+                skip = next;
+            } else {
                 break;
             }
         }
 
-        if present_skip == instance.service_list.len() {
-            present_skip = 0;
-
-            while schedule_skip < instance.service_list.len() {
-                let service = &instance.service_list[schedule_skip];
-                service.schedule.demux(psi::EIT_PID, &mut eit_cc, &mut ts);
-                fill_null_ts(&mut ts);
-                schedule_skip += 1;
-                if ts.len() >= rate_limit {
-                    break;
-                }
-            }
-
-            if schedule_skip == instance.service_list.len() {
-                schedule_skip = 0;
-            }
-        }
-
-        let packets = ts.len() / ts::PACKET_SIZE;
-        if packets == 0 {
-            thread::sleep(idle_delay);
-            continue;
-        }
-
-        let pps = time::Duration::from_nanos(1_000_000_000_u64 / (((6 + packets) / 7) as u64));
-
-        // TODO: UDP output
-        let mut skip = 0;
-        while skip < ts.len() {
-            let pkt_len = cmp::min(ts.len() - skip, BLOCK_SIZE);
-            let next = skip + pkt_len;
-            if next > rate_limit { break };
-            instance.output.send(&ts[skip..next]).unwrap();
-            thread::sleep(pps);
-            skip = next;
-        }
-
-        ts.drain(.. skip);
+        ts_buffer.clear();
     }
 }
 
