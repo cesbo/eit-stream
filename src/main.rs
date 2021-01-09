@@ -461,7 +461,7 @@ fn init_schema() -> Schema {
         "How many days includes into EPG schedule. Range: 1 .. 7. Default: 3",
         false, Schema::range(1 .. 7));
     schema.set("eit-rate",
-        "Limit EPG output bitrate in kbit/s. Range: 15 .. 20000",
+        "Limit EPG output bitrate in kbit/s. Range: 15 .. 20000. Default: 30 kbit/s per service",
         false, Schema::range(15 .. 20000));
 
     schema.push(schema_tdt_tot);
@@ -590,27 +590,32 @@ fn wrap() -> Result<()> {
     // Main loop
 
     let mut eit_cc = 0;
-    // let rate_limit = match instance.eit_rate {
-    //     Some(v) => v * 1000 / 8,
-    //     None => 15 * 1000 / 8, /* TODO: instance.service_list */
-    // };
+
+    let rate_limit = instance.eit_rate.unwrap_or_else(|| {
+        instance.service_list.len() * 30
+    });
+    let rate_limit = rate_limit * 1000 / 8;
+    let pps = time::Duration::from_nanos(
+        1_000_000_000u64 * (BLOCK_SIZE as u64) / (rate_limit as u64)
+    );
+
 
     let mut ts_buffer = Vec::<u8>::with_capacity(instance.service_list.len() * ts::PACKET_SIZE * 20);
 
+    let mut schedule_skip = 0;
+
     loop {
+        if let Some(tdt_tot) = &mut instance.tdt_tot {
+            tdt_tot.demux(&mut ts_buffer);
+            fill_null_ts(&mut ts_buffer);
+        }
+
         for service in &mut instance.service_list {
             service.clear();
 
             let mut present_psi_list = service.present.psi_list_assemble();
             if present_psi_list.is_empty() {
                 continue;
-            }
-
-            let mut schedule_psi_list = service.schedule.psi_list_assemble();
-
-            if let Some(tdt_tot) = &mut instance.tdt_tot {
-                tdt_tot.demux(&mut ts_buffer);
-                fill_null_ts(&mut ts_buffer);
             }
 
             for p in &mut present_psi_list {
@@ -621,7 +626,13 @@ fn wrap() -> Result<()> {
 
                 fill_null_ts(&mut ts_buffer);
             }
+        }
 
+        while schedule_skip < instance.service_list.len() {
+            let service = &instance.service_list[schedule_skip];
+            schedule_skip += 1;
+
+            let mut schedule_psi_list = service.schedule.psi_list_assemble();
             for p in &mut schedule_psi_list {
                 p.pid = psi::EIT_PID;
                 p.cc = eit_cc;
@@ -630,15 +641,20 @@ fn wrap() -> Result<()> {
 
                 fill_null_ts(&mut ts_buffer);
             }
+
+            if ts_buffer.len() >= rate_limit {
+                break;
+            }
+        }
+
+        if schedule_skip == instance.service_list.len() {
+            schedule_skip = 0;
         }
 
         if ts_buffer.len() == 0 {
             thread::sleep(IDLE_DELAY);
             continue;
         }
-
-        // let packets = (ts_buffer.len() + ts::PACKET_SIZE - 1) / ts::PACKET_SIZE;
-        let pps = time::Duration::from_millis(30);
 
         let mut skip = 0;
         loop {
