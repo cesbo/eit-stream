@@ -463,7 +463,7 @@ fn init_schema() -> Schema {
         "How many days includes into EPG schedule. Range: 1 .. 7. Default: 3",
         false, Schema::range(1 .. 7));
     schema.set("eit-rate",
-        "Limit EPG output bitrate in kbit/s. Range: 15 .. 20000. Default: 15 kbit/s per service",
+        "Limit EPG output bitrate in kbit/s. Range: 15 .. 20000. Default: 30 kbit/s per service",
         false, Schema::range(15 .. 20000));
 
     schema.push(schema_tdt_tot);
@@ -594,7 +594,7 @@ fn wrap() -> Result<()> {
     let mut eit_cc = 0;
 
     let rate_limit = instance.eit_rate.unwrap_or_else(|| {
-        instance.service_list.len() * 15
+        instance.service_list.len() * 30
     });
     let rate_limit = rate_limit * 1000 / 8;
     let pps = time::Duration::from_nanos(
