@@ -10,8 +10,11 @@ error-rules = "0.2"
 chrono = "0.4"
 config = { git = "ssh://git@github.com/cesbo/libconfig.git", branch = "master" }
 udp = { git = "ssh://git@github.com/cesbo/libudp.git", branch = "master" }
-mpegts = { path = "../libmpegts" }
-epg = { path = "../libepg" }
+mpegts = { git = "ssh://git@github.com/cesbo/libmpegts.git", branch = "master" }
+epg = { git = "ssh://git@github.com/cesbo/libepg.git", branch = "master" }
+
+[build-dependencies]
+chrono = "0.4"
 
 [features]
 static = ["epg/static"]

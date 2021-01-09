@@ -1,47 +1,49 @@
 #[macro_use]
 extern crate error_rules;
 
-use std::{
-    io::{
-        self,
-        BufWriter,
-        Write,
+use {
+    std::{
+        io::{
+            self,
+            BufWriter,
+            Write,
+        },
+        time,
+        thread,
+        cmp,
+        fs::File,
+        collections::HashMap,
     },
-    time,
-    thread,
-    cmp,
-    fs::File,
-    collections::HashMap,
-};
 
-use chrono;
+    chrono,
 
-use epg::{
-    Epg,
-    EpgError,
-};
-
-use mpegts::{
-    ts,
-    psi::{
-        self,
-        PsiDemux,
-        Eit,
-        EitItem,
-        Tdt,
-        Tot,
-        Desc58,
-        Desc58i,
+    epg::{
+        Epg,
+        EpgError,
     },
-    textcode,
-};
 
-use udp::UdpSocket;
+    mpegts::{
+        ts,
+        psi::{
+            self,
+            PsiDemux,
+            Eit,
+            EitItem,
+            Tdt,
+            Tot,
+            Desc58,
+            Desc58i,
+        },
+        textcode,
+    },
 
-use config::{
-    Config,
-    Schema,
-    ConfigError,
+    udp::UdpSocket,
+
+    config::{
+        Config,
+        Schema,
+        ConfigError,
+    },
 };
 
 
@@ -74,7 +76,7 @@ include!(concat!(env!("OUT_DIR"), "/build.rs"));
 
 
 fn version() {
-    println!("eit-stream v.{} commit:{}", env!("CARGO_PKG_VERSION"), COMMIT);
+    println!("eit-stream {} commit:{}", BUILD_DATE, BUILD_ID);
 }
 
 

@@ -1,7 +1,14 @@
-use std::env;
-use std::fs::File;
-use std::io::Write;
-use std::process::Command;
+use {
+    std::{
+        env,
+        fs::File,
+        io::Write,
+        process::Command,
+    },
+
+    chrono::offset::Local,
+};
+
 
 fn main() {
     let n = env::var("OUT_DIR").unwrap() + "/build.rs";
@@ -15,6 +22,17 @@ fn main() {
     let commit = String::from_utf8(output.stdout).unwrap();
     let commit = commit.trim_end();
 
-    let info = format!("pub static COMMIT: &'static str = \"{}\";\n", commit);
-    f.write(info.as_bytes()).unwrap();
+    let dt = Local::now();
+
+    let s = format!(
+        "pub static BUILD_ID: &'static str = \"{}\";\n",
+        commit
+    );
+    f.write(s.as_bytes()).unwrap();
+
+    let s = format!(
+        "pub static BUILD_DATE: &'static str = \"{}\";\n",
+        dt.format("%Y-%m-%d")
+    );
+    f.write(s.as_bytes()).unwrap();
 }
