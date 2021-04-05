@@ -60,8 +60,6 @@ enum AppError {
     UnknownOutput,
     #[error_kind("output not defined")]
     MissingOutput,
-    #[error_kind("xmltv not defined")]
-    MissingXmltv,
 }
 
 
@@ -219,23 +217,29 @@ struct Instance {
 
 
 impl Instance {
-    fn open_xmltv(&mut self, config: &Config, def: usize) -> Result<usize> {
+    fn open_xmltv(&mut self, config: &Config, def: usize) -> Result<Option<usize>> {
         let path = match config.get("xmltv") {
             Some(v) => v,
-            None => return Ok(def),
+            None => return Ok(Some(def)),
         };
 
         if let Some(&v) = self.epg_map.get(path) {
-            return Ok(v);
+            return Ok(Some(v));
         }
 
         let mut epg = Epg::default();
-        epg.load(path)?;
+        match epg.load(path) {
+            Ok(_) => {},
+            Err(e) => {
+                eprintln!("Error: failed to load XMLTV from {} [{}]", path, e);
+                return Ok(None);
+            }
+        };
         let v = self.epg_list.len();
         self.epg_list.push(epg);
         self.epg_map.insert(path.to_owned(), v);
 
-        Ok(v)
+        Ok(Some(v))
     }
 
     fn open_output(&mut self, addr: &str) -> Result<()> {
@@ -251,7 +255,10 @@ impl Instance {
         self.multiplex.onid = config.get("onid").unwrap_or(self.onid);
         self.multiplex.codepage = config.get("codepage").unwrap_or(self.codepage);
         self.multiplex.tsid = config.get("tsid").unwrap_or(1);
-        self.multiplex.epg_item_id = self.open_xmltv(&config, self.epg_item_id)?;
+        match self.open_xmltv(&config, self.epg_item_id)? {
+            Some(v) => self.multiplex.epg_item_id = v,
+            None => return Ok(()),
+        };
 
         for s in config.iter() {
             if s.get_name() != "service" {
@@ -259,17 +266,25 @@ impl Instance {
             }
 
             let mut service = Service::default();
-            match s.get("xmltv-id") {
-                Some(v) => service.xmltv_id.push_str(v),
+            let xmltv_id = match s.get("xmltv-id") {
+                Some(v) => {
+                    service.xmltv_id.push_str(v);
+                    v
+                }
                 None => {
                     eprintln!("Warning: 'xmltv-id' option not defined for service at line {}", s.get_line());
                     continue;
-                },
+                }
             };
 
-            service.epg_item_id = self.open_xmltv(s, self.multiplex.epg_item_id)?;
+            match self.open_xmltv(s, self.multiplex.epg_item_id)? {
+                Some(v) => service.epg_item_id = v,
+                None => continue,
+            };
+
             if service.epg_item_id == usize::max_value() {
-                return Err(AppError::MissingXmltv);
+                eprintln!("Error: XMLTV for channel {} is not found", xmltv_id);
+                continue;
             }
 
             service.onid = self.multiplex.onid;
@@ -532,7 +547,11 @@ fn wrap() -> Result<()> {
     instance.eit_days = config.get("eit-days").unwrap_or(3);
     instance.eit_rate = config.get("eit-rate");
 
-    instance.epg_item_id = instance.open_xmltv(&config, usize::max_value())?;
+    match instance.open_xmltv(&config, usize::max_value())? {
+        Some(v) => instance.epg_item_id = v,
+        None => instance.epg_item_id = usize::max_value(),
+    };
+
     match config.get("output") {
         Some(v) => instance.open_output(v)?,
         None => return Err(AppError::MissingOutput),
