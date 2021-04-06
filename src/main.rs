@@ -92,6 +92,11 @@ CONFIG:
 }
 
 
+fn parse_offset(offset: &str) -> i32 {
+    offset.parse::<i32>().unwrap_or(0)
+}
+
+
 #[derive(Debug)]
 enum Output {
     None,
@@ -152,11 +157,14 @@ impl TdtTot {
         let country = config.get("country").unwrap_or("   ");
 
         let (offset, offset_polarity) = {
-            let offset = config.get("offset").unwrap_or("0");
-            match offset.as_bytes()[0] {
-                b'+' => (offset[1 ..].parse::<u16>().unwrap(), 0),
-                b'-' => (offset[1 ..].parse::<u16>().unwrap(), 1),
-                _ => (0, 0),
+            let offset = config.get("offset")
+                .map(parse_offset)
+                .unwrap_or(0);
+
+            if offset >= 0 {
+                (offset as u16, 0)
+            } else {
+                ((-offset) as u16, 1)
             }
         };
 
@@ -212,6 +220,8 @@ struct Instance {
     eit_days: usize,
     eit_rate: Option<usize>,
 
+    utc_offset: i32,
+
     tdt_tot: Option<TdtTot>,
 }
 
@@ -252,9 +262,16 @@ impl Instance {
             return Ok(())
         }
 
-        self.multiplex.onid = config.get("onid").unwrap_or(self.onid);
-        self.multiplex.codepage = config.get("codepage").unwrap_or(self.codepage);
-        self.multiplex.tsid = config.get("tsid").unwrap_or(1);
+        self.multiplex.onid = config.get("onid")
+            .unwrap_or(self.onid);
+        self.multiplex.codepage = config.get("codepage")
+            .unwrap_or(self.codepage);
+        self.multiplex.utc_offset = config.get("utc-offset")
+            .map(parse_offset)
+            .unwrap_or(self.utc_offset);
+        self.multiplex.tsid = config.get("tsid")
+            .unwrap_or(1);
+
         match self.open_xmltv(&config, self.epg_item_id)? {
             Some(v) => self.multiplex.epg_item_id = v,
             None => return Ok(()),
@@ -289,7 +306,11 @@ impl Instance {
 
             service.onid = self.multiplex.onid;
             service.tsid = self.multiplex.tsid;
-            service.codepage = s.get("codepage").unwrap_or(self.multiplex.codepage);
+            service.codepage = s.get("codepage")
+                .unwrap_or(self.multiplex.codepage);
+            service.utc_offset = s.get("utc-offset")
+                .map(parse_offset)
+                .unwrap_or(self.multiplex.utc_offset);
             service.pnr = s.get("pnr").unwrap_or(0);
             self.service_list.push(service);
         }
@@ -318,6 +339,7 @@ struct Multiplex {
     onid: u16,
     tsid: u16,
     codepage: u8,
+    utc_offset: i32,
 }
 
 
@@ -328,6 +350,7 @@ struct Service {
     onid: u16,
     tsid: u16,
     codepage: u8,
+    utc_offset: i32,
 
     pnr: u16,
     xmltv_id: String,
@@ -416,6 +439,9 @@ fn init_schema() -> Schema {
     schema_service.set("xmltv",
         "Redefine XMLTV source for service. Default: multiplex xmltv",
         false, None);
+    schema_service.set("utc-offset",
+        "Change UTC time in the range between -720 minutes and +780 minutes. Default: 0",
+        false, offset_validator);
 
     let mut schema_multiplex = Schema::new("multiplex",
         "Multiplex configuration. App contains one or more multiplexes");
@@ -428,6 +454,9 @@ fn init_schema() -> Schema {
     schema_multiplex.set("xmltv",
         "Redefine XMLTV source for multiplex. Default: app xmltv",
         false, None);
+    schema_multiplex.set("utc-offset",
+        "Change UTC time in the range between -720 minutes and +780 minutes. Default: 0",
+        false, offset_validator);
     schema_multiplex.push(schema_service);
 
     let mut schema_tdt_tot = Schema::new("tdt-tot",
@@ -480,6 +509,9 @@ fn init_schema() -> Schema {
     schema.set("eit-rate",
         "Limit EPG output bitrate in kbit/s. Range: 15 .. 20000. Default: 30 kbit/s per service",
         false, Schema::range(15 .. 20000));
+    schema.set("utc-offset",
+        "Change UTC time in the range between -720 minutes and +780 minutes. Default: 0",
+        false, offset_validator);
 
     schema.push(schema_tdt_tot);
     schema.push(schema_multiplex);
@@ -546,6 +578,7 @@ fn wrap() -> Result<()> {
     instance.codepage = config.get("codepage").unwrap_or(0);
     instance.eit_days = config.get("eit-days").unwrap_or(3);
     instance.eit_rate = config.get("eit-rate");
+    instance.utc_offset = config.get("utc-offset").map(parse_offset).unwrap_or(0);
 
     match instance.open_xmltv(&config, usize::max_value())? {
         Some(v) => instance.epg_item_id = v,
@@ -594,9 +627,13 @@ fn wrap() -> Result<()> {
         service.schedule.onid = service.onid;
 
         for event in &mut epg_item.events {
+            event.start = ((event.start as i64) - (service.utc_offset as i64) * 60) as u64;
+            event.stop = ((event.stop as i64) - (service.utc_offset as i64) * 60) as u64;
+
             if event.start > last_time {
                 break;
             }
+
             if event.stop > current_time {
                 event.codepage = service.codepage;
                 service.schedule.items.push(EitItem::from(&*event));
