@@ -446,8 +446,8 @@ fn init_schema() -> Schema {
     let mut schema_multiplex = Schema::new("multiplex",
         "Multiplex configuration. App contains one or more multiplexes");
     schema_multiplex.set("tsid",
-        "Transport Stream Identifier. Required. Range 1 .. 65535",
-        true, Schema::range(1 .. 65535));
+        "Transport Stream Identifier. Required. Range 0 .. 65535",
+        true, Schema::range(0 .. 65535));
     schema_multiplex.set("codepage",
         "Redefine codepage for multiplex. Default: app codepage",
         false, codepage_validator);
