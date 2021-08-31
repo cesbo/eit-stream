@@ -219,6 +219,7 @@ struct Instance {
     eit_rate: Option<usize>,
 
     utc_offset: i32,
+    country: String,
 
     tdt_tot: Option<TdtTot>,
 }
@@ -280,7 +281,22 @@ impl Instance {
                 continue;
             }
 
-            let mut service = Service::default();
+            let mut service = Service {
+                onid: self.multiplex.onid,
+                tsid: self.multiplex.tsid,
+                codepage: s.get("codepage")
+                    .unwrap_or(self.multiplex.codepage),
+                utc_offset: s.get("utc-offset")
+                    .map(parse_offset)
+                    .unwrap_or(self.multiplex.utc_offset),
+                parental_rating: s.get("parental-rating")
+                    .unwrap_or(0),
+                pnr: s.get("pnr")
+                    .unwrap_or(0),
+
+                ..Default::default()
+            };
+
             let xmltv_id = match s.get("xmltv-id") {
                 Some(v) => {
                     service.xmltv_id.push_str(v);
@@ -302,14 +318,6 @@ impl Instance {
                 continue;
             }
 
-            service.onid = self.multiplex.onid;
-            service.tsid = self.multiplex.tsid;
-            service.codepage = s.get("codepage")
-                .unwrap_or(self.multiplex.codepage);
-            service.utc_offset = s.get("utc-offset")
-                .map(parse_offset)
-                .unwrap_or(self.multiplex.utc_offset);
-            service.pnr = s.get("pnr").unwrap_or(0);
             self.service_list.push(service);
         }
 
@@ -349,6 +357,7 @@ struct Service {
     tsid: u16,
     codepage: u8,
     utc_offset: i32,
+    parental_rating: u8,
 
     pnr: u16,
     xmltv_id: String,
@@ -440,6 +449,9 @@ fn init_schema() -> Schema {
     schema_service.set("utc-offset",
         "Change UTC time in the range between -720 minutes and +780 minutes. Default: 0",
         false, offset_validator);
+    schema_service.set("parental-rating",
+        "Recommended minimum age of the end user. Should be in range 4 .. 18. Default: 0",
+        false, Schema::range(4 .. 18));
 
     let mut schema_multiplex = Schema::new("multiplex",
         "Multiplex configuration. App contains one or more multiplexes");
@@ -576,6 +588,7 @@ fn wrap() -> Result<()> {
         eit_days: config.get("eit-days").unwrap_or(3),
         eit_rate: config.get("eit-rate"),
         utc_offset: config.get("utc-offset").map(parse_offset).unwrap_or(0),
+        country: config.get("country").unwrap_or("   ").to_owned(),
         ..Default::default()
     };
 
@@ -635,6 +648,14 @@ fn wrap() -> Result<()> {
 
             if event.stop > current_time {
                 event.codepage = service.codepage;
+
+                if service.parental_rating != 0 {
+                    event.parental_rating.insert(
+                        instance.country.clone(),
+                        service.parental_rating
+                    );
+                }
+
                 service.schedule.items.push(EitItem::from(&*event));
             }
         }
