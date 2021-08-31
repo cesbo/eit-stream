@@ -15,8 +15,6 @@ use {
         collections::HashMap,
     },
 
-    chrono,
-
     epg::{
         Epg,
         EpgError,
@@ -272,7 +270,7 @@ impl Instance {
         self.multiplex.tsid = config.get("tsid")
             .unwrap_or(1);
 
-        match self.open_xmltv(&config, self.epg_item_id)? {
+        match self.open_xmltv(config, self.epg_item_id)? {
             Some(v) => self.multiplex.epg_item_id = v,
             None => return Ok(()),
         };
@@ -404,7 +402,7 @@ impl Service {
 fn init_schema() -> Schema {
     let codepage_validator = |s: &str| -> bool {
         let v = s.parse::<usize>().unwrap_or(1000);
-        (v <= 11) || (v >= 13 && v <= 15) || (v == 21)
+        (v <= 11) || (13 ..= 15).contains(&v) || (v == 21)
     };
 
     let country_validator = |s: &str| -> bool {
@@ -415,10 +413,10 @@ fn init_schema() -> Schema {
         if s.is_empty() { return false }
         match s.as_bytes()[0] {
             b'+' => s[1 ..].parse::<u16>()
-                .and_then(|v| Ok(v <= 720))
+                .map(|v| v <= 720)
                 .unwrap_or(false),
             b'-' => s[1 ..].parse::<u16>()
-                .and_then(|v| Ok(v <= 780))
+                .map(|v| v <= 780)
                 .unwrap_or(false),
             b'0' if s.len() == 1 => true,
             _ => false,
@@ -572,13 +570,14 @@ fn fill_null_ts(dst: &mut Vec<u8>) {
 fn wrap() -> Result<()> {
     let config = load_config()?;
 
-    let mut instance = Instance::default();
-
-    instance.onid = config.get("onid").unwrap_or(1);
-    instance.codepage = config.get("codepage").unwrap_or(0);
-    instance.eit_days = config.get("eit-days").unwrap_or(3);
-    instance.eit_rate = config.get("eit-rate");
-    instance.utc_offset = config.get("utc-offset").map(parse_offset).unwrap_or(0);
+    let mut instance = Instance {
+        onid: config.get("onid").unwrap_or(1),
+        codepage: config.get("codepage").unwrap_or(0),
+        eit_days: config.get("eit-days").unwrap_or(3),
+        eit_rate: config.get("eit-rate"),
+        utc_offset: config.get("utc-offset").map(parse_offset).unwrap_or(0),
+        ..Default::default()
+    };
 
     match instance.open_xmltv(&config, usize::max_value())? {
         Some(v) => instance.epg_item_id = v,
@@ -711,7 +710,7 @@ fn wrap() -> Result<()> {
             schedule_skip = 0;
         }
 
-        if ts_buffer.len() == 0 {
+        if ts_buffer.is_empty() {
             thread::sleep(IDLE_DELAY);
             continue;
         }

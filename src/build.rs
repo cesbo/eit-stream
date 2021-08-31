@@ -28,11 +28,11 @@ fn main() {
         "pub static BUILD_ID: &'static str = \"{}\";\n",
         commit
     );
-    f.write(s.as_bytes()).unwrap();
+    f.write_all(s.as_bytes()).unwrap();
 
     let s = format!(
         "pub static BUILD_DATE: &'static str = \"{}\";\n",
         dt.format("%Y-%m-%d")
     );
-    f.write(s.as_bytes()).unwrap();
+    f.write_all(s.as_bytes()).unwrap();
 }
