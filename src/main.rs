@@ -180,7 +180,7 @@ impl TdtTot {
             offset_polarity,
             offset,
             time_of_change: 0,
-            next_offset: 0,
+            next_offset: offset,
         });
 
         Ok(())
@@ -402,7 +402,7 @@ impl Service {
             self.present.items.push(item.clone());
         }
 
-        let mut event = self.present.items.first_mut().unwrap();
+        let event = self.present.items.first_mut().unwrap();
         event.status = 4;
     }
 }
@@ -650,10 +650,18 @@ fn wrap() -> Result<()> {
                 event.codepage = service.codepage;
 
                 if service.parental_rating != 0 {
-                    event.parental_rating.insert(
-                        instance.country.clone(),
-                        service.parental_rating
-                    );
+                    let country = instance.country.as_bytes();
+                    if country.len() >= 3 {
+                        let country_bytes: [u8; 3] = [
+                            country[0],
+                            country[1],
+                            country[2],
+                        ];
+                        event.parental_rating.insert(
+                            country_bytes,
+                            service.parental_rating
+                        );
+                    }
                 }
 
                 service.schedule.items.push(EitItem::from(&*event));
